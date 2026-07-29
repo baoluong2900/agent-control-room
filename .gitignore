@@ -12,11 +12,19 @@
 
 # testing
 /coverage
+.pytest_cache/
 
 # next.js
 /.next/
 /.vinext/
 /out/
+.vite/
+/agents.html
+/overview.html
+/public/agents.html
+/public/overview.html
+/image/ui/
+*.tsbuildinfo
 
 # misc
 .DS_Store
@@ -40,3 +48,9 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# local verification artifacts
+.verify/
+
+# local tooling state
+/.openai/

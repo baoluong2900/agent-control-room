@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
+    "target": "ES2022",
     "lib": ["dom", "dom.iterable", "esnext"],
-    "allowJs": true,
+    "allowJs": false,
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
@@ -13,22 +13,29 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
+    "baseUrl": ".",
+    "types": ["node", "vite/client"],
     "paths": {
-      "@/*": ["./*"]
+      "@contracts": ["./packages/contracts/index.ts"],
+      "@desktop/*": ["./apps/desktop/src/*"],
+      "@contracts/*": ["./packages/contracts/*"]
     }
   },
   "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    "apps/desktop/src/**/*.ts",
+    "apps/desktop/src/**/*.tsx",
+    "packages/**/*.ts",
+    "forge.config.ts",
+    "apps/desktop/*.config.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    "worker",
+    "examples",
+    "db",
+    "build",
+    ".next",
+    ".vite",
+    "out"
+  ]
 }
