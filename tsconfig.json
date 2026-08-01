@@ -11,22 +11,29 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // tests/ import through the node TS loader, which resolves explicit .ts
+    // specifiers. Safe with noEmit: it permits the extension, never requires it.
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "incremental": true,
     "baseUrl": ".",
     "types": ["node", "vite/client"],
     "paths": {
-      "@contracts": ["./packages/contracts/index.ts"],
-      "@desktop/*": ["./apps/desktop/src/*"],
-      "@contracts/*": ["./packages/contracts/*"]
+      "@contracts": ["./src/contracts/index.ts"],
+      "@desktop/*": ["./src/*"],
+      "@contracts/*": ["./src/contracts/*"]
     }
   },
   "include": [
-    "apps/desktop/src/**/*.ts",
-    "apps/desktop/src/**/*.tsx",
-    "packages/**/*.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    // scripts/ and tests/ call into main-process services directly. Leaving them
+    // out of the program let the harnesses drift out of sync with
+    // registerIpcHandlers while `npm run typecheck` still reported clean.
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
     "forge.config.ts",
-    "apps/desktop/*.config.ts"
+    "vite.*.config.ts"
   ],
   "exclude": [
     "node_modules",

@@ -5,14 +5,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { app, BrowserWindow } from "electron";
-import { DesktopDatabase } from "../apps/desktop/src/main/database/desktop-database";
-import { registerIpcHandlers } from "../apps/desktop/src/main/ipc/register-ipc";
-import { AgentProcessManager } from "../apps/desktop/src/main/processes/agent-process-manager";
-import { ProjectService } from "../apps/desktop/src/main/projects/project-service";
-import { ProviderSecretVault } from "../apps/desktop/src/main/settings/provider-secret-vault";
-import { SettingsService } from "../apps/desktop/src/main/settings/settings-service";
-import { TaskAutomationService } from "../apps/desktop/src/main/tasks/task-automation-service";
-import { WorkflowService } from "../apps/desktop/src/main/workflows/workflow-service";
+import { DesktopDatabase } from "../src/main/database/desktop-database";
+import { registerIpcHandlers } from "../src/main/ipc/register-ipc";
+import { AgentProcessManager } from "../src/main/processes/agent-process-manager";
+import { ProjectService } from "../src/main/projects/project-service";
+import { ProviderSecretVault } from "../src/main/settings/provider-secret-vault";
+import { SettingsService } from "../src/main/settings/settings-service";
+import { KnowledgeService } from "../src/main/knowledge/knowledge-service";
+import { TaskAutomationService } from "../src/main/tasks/task-automation-service";
+import { WorkflowSchedulerService } from "../src/main/workflows/workflow-scheduler";
+import { WorkflowService } from "../src/main/workflows/workflow-service";
 
 const rendererDir = process.env.AGENTIC_RENDERER_DIR ?? "/tmp/agentic-renderer-check";
 const preloadPath = process.env.AGENTIC_PRELOAD ?? "/tmp/agentic-task-nav/preload.js";
@@ -31,6 +33,16 @@ const helpers = `
       .find((node) => node.querySelector('span')?.textContent?.trim() === label);
 `;
 
+/**
+ * Stand-in for Electron's `safeStorage`. NOT encryption — it only base64-wraps
+ * the value so the vault has a working backend in dev harnesses, which run
+ * without an OS keychain session. Never use outside these scripts.
+ */
+const harnessSecretStorage = {
+  isEncryptionAvailable: () => true,
+  encryptString: (plainText: string) => Buffer.from(plainText, "utf8"),
+};
+
 async function main() {
   await app.whenReady();
   fs.mkdirSync(outDir, { recursive: true });
@@ -41,13 +53,26 @@ async function main() {
   const manager = new AgentProcessManager(database, () => window?.webContents ?? null);
   const taskAutomationService = new TaskAutomationService(database, manager, () => window?.webContents ?? null);
   const workflowService = new WorkflowService(database, () => window?.webContents ?? null);
+  const workflowSchedulerService = new WorkflowSchedulerService(workflowService, () => window?.webContents ?? null);
   registerIpcHandlers({
     agentProcessManager: manager,
     database,
+    knowledgeService: new KnowledgeService(database),
     projectService: new ProjectService(database),
-    settingsService: new SettingsService(database, new ProviderSecretVault(userDataPath)),
+    // Harness never opens a real browser window.
+    settingsService: new SettingsService(database, new ProviderSecretVault(userDataPath, harnessSecretStorage), {
+      openExternal: async () => {},
+    }),
     taskAutomationService,
+    workflowSchedulerService,
     workflowService,
+  });
+
+  await database.saveAppIdentity({
+    displayName: "Local Workspace",
+    email: "owner@agentic.local",
+    loginMethod: "email",
+    status: "signed-in",
   });
 
   window = new BrowserWindow({
@@ -133,11 +158,20 @@ async function main() {
   check("AgenticOS active agents card remains visible", audit.sidebarStatus === true);
   check("tasks nav item is active", audit.activeNav === "Tasks", String(audit.activeNav));
   check(
-    "AgenticOS nav keeps Tasks next to Agents",
+    "AgenticOS nav follows the overview module order",
     Array.isArray(audit.navLabels) &&
-      audit.navLabels.indexOf("Tasks") >= 0 &&
-      audit.navLabels.indexOf("Agents") >= 0 &&
-      audit.navLabels.indexOf("Tasks") < audit.navLabels.indexOf("Agents"),
+      JSON.stringify(audit.navLabels) ===
+        JSON.stringify([
+          "Overview",
+          "Agents",
+          "Projects",
+          "Workflows",
+          "Tasks",
+          "Knowledge",
+          "Integrations",
+          "Analytics",
+          "Settings",
+        ]),
     JSON.stringify(audit.navLabels),
   );
   check(

@@ -12,14 +12,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { app, BrowserWindow } from "electron";
-import { DesktopDatabase } from "../apps/desktop/src/main/database/desktop-database";
-import { registerIpcHandlers } from "../apps/desktop/src/main/ipc/register-ipc";
-import { AgentProcessManager } from "../apps/desktop/src/main/processes/agent-process-manager";
-import { ProjectService } from "../apps/desktop/src/main/projects/project-service";
-import { ProviderSecretVault } from "../apps/desktop/src/main/settings/provider-secret-vault";
-import { SettingsService } from "../apps/desktop/src/main/settings/settings-service";
-import { TaskAutomationService } from "../apps/desktop/src/main/tasks/task-automation-service";
-import { WorkflowService } from "../apps/desktop/src/main/workflows/workflow-service";
+import { DesktopDatabase } from "../src/main/database/desktop-database";
+import { registerIpcHandlers } from "../src/main/ipc/register-ipc";
+import { AgentProcessManager } from "../src/main/processes/agent-process-manager";
+import { ProjectService } from "../src/main/projects/project-service";
+import { ProviderSecretVault } from "../src/main/settings/provider-secret-vault";
+import { SettingsService } from "../src/main/settings/settings-service";
+import { KnowledgeService } from "../src/main/knowledge/knowledge-service";
+import { TaskAutomationService } from "../src/main/tasks/task-automation-service";
+import { WorkflowSchedulerService } from "../src/main/workflows/workflow-scheduler";
+import { WorkflowService } from "../src/main/workflows/workflow-service";
 
 const rendererDir = process.env.AGENTIC_RENDERER_DIR ?? "/tmp/agentic-renderer-check";
 const preloadPath = process.env.AGENTIC_PRELOAD ?? "/tmp/agentic-shot/preload.js";
@@ -27,6 +29,16 @@ const outDir = process.env.AGENTIC_OUT_DIR ?? "/tmp/agentic-shot";
 const shotName = process.env.AGENTIC_SHOT_NAME ?? "overview";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Stand-in for Electron's `safeStorage`. NOT encryption — it only base64-wraps
+ * the value so the vault has a working backend in dev harnesses, which run
+ * without an OS keychain session. Never use outside these scripts.
+ */
+const harnessSecretStorage = {
+  isEncryptionAvailable: () => true,
+  encryptString: (plainText: string) => Buffer.from(plainText, "utf8"),
+};
 
 async function main() {
   await app.whenReady();
@@ -41,10 +53,22 @@ async function main() {
   registerIpcHandlers({
     agentProcessManager: manager,
     database,
+    knowledgeService: new KnowledgeService(database),
     projectService: new ProjectService(database),
-    settingsService: new SettingsService(database, new ProviderSecretVault(userDataPath)),
+    // Harness never opens a real browser window.
+    settingsService: new SettingsService(database, new ProviderSecretVault(userDataPath, harnessSecretStorage), {
+      openExternal: async () => {},
+    }),
     taskAutomationService,
+    workflowSchedulerService: new WorkflowSchedulerService(workflowService, () => window?.webContents ?? null),
     workflowService,
+  });
+
+  await database.saveAppIdentity({
+    displayName: "Local Workspace",
+    email: "owner@agentic.local",
+    loginMethod: "email",
+    status: "signed-in",
   });
 
   window = new BrowserWindow({

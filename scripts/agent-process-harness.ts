@@ -5,8 +5,8 @@
 import os from "node:os";
 import path from "node:path";
 import type { AgentEvent } from "@contracts";
-import { DesktopDatabase } from "../apps/desktop/src/main/database/desktop-database";
-import { AgentProcessManager } from "../apps/desktop/src/main/processes/agent-process-manager";
+import { DesktopDatabase } from "../src/main/database/desktop-database";
+import { AgentProcessManager } from "../src/main/processes/agent-process-manager";
 
 const failures: string[] = [];
 const check = (label: string, ok: boolean, detail = "") => {

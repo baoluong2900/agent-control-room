@@ -4,10 +4,10 @@
  */
 import os from "node:os";
 import path from "node:path";
-import { listAgentCatalog, defaultModelFor } from "../apps/desktop/src/main/agents/catalog";
-import { buildInvocation, parseArgs, quoteCommand } from "../apps/desktop/src/main/agents/commands";
-import { pingAllAgentClis, probeAgentModels } from "../apps/desktop/src/main/agents/probe";
-import { DesktopDatabase } from "../apps/desktop/src/main/database/desktop-database";
+import { listAgentCatalog, defaultModelFor } from "../src/main/agents/catalog";
+import { buildInvocation, parseArgs, quoteCommand } from "../src/main/agents/commands";
+import { pingAllAgentClis, probeAgentModels } from "../src/main/agents/probe";
+import { DesktopDatabase } from "../src/main/database/desktop-database";
 
 async function main() {
   const failures: string[] = [];
