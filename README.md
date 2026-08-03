@@ -27,13 +27,13 @@ npm run build
 ## Desktop app shape
 
 ```text
-apps/desktop/
-├── src/main/       Electron main process, IPC, CLI process manager, SQLite, Git
-├── src/preload/    contextBridge API exposed as window.agentic
-└── src/renderer/   React UI, 3D workspace map, terminal, controls
+src/
+├── main/       Electron main process, IPC, CLI process manager, SQLite, Git
+├── preload/    contextBridge API exposed as window.agentic
+├── renderer/   React UI, 3D workspace map, terminal, controls
+└── contracts/  Shared IPC and domain types
 
-packages/contracts/ Shared IPC and domain types
-forge.config.ts     Electron Forge packaging config
+forge.config.ts Electron Forge packaging config
 ```
 
 ## Phase 1 implemented
@@ -205,4 +205,4 @@ There is no `app/` directory and no web fallback page;
 `tests/rendered-html.test.mjs` asserts the starter files stay deleted and that
 `next`, `vinext`, `drizzle-orm`, and `wrangler` stay out of `package.json`. The
 shared visual baseline lives with the renderer at
-`apps/desktop/src/renderer/globals.css`, imported by `renderer/styles.css`.
+`src/renderer/globals.css`, imported by `renderer/styles.css`.

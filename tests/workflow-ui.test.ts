@@ -11,7 +11,7 @@ import {
   stepKindMeta,
   stepKinds,
   triggerMeta,
-} from "../apps/desktop/src/renderer/workflows/workflow-ui.ts";
+} from "../src/renderer/workflows/workflow-ui.ts";
 
 test("formatDuration renders human-friendly durations", () => {
   assert.equal(formatDuration(undefined), "—");

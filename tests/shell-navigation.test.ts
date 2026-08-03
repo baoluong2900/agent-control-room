@@ -3,26 +3,32 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("renderer navigation uses one AgenticOS shell", async () => {
-  const [app, sidebar, agentsCss] = await Promise.all([
-    readFile(new URL("../apps/desktop/src/renderer/App.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../apps/desktop/src/renderer/components/Sidebar.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../apps/desktop/src/renderer/agents/agents.css", import.meta.url), "utf8"),
+  const [app, sidebar, navigation, agentsCss] = await Promise.all([
+    readFile(new URL("../src/renderer/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/renderer/components/Sidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/renderer/workspace-navigation.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/renderer/agents/agents.css", import.meta.url), "utf8"),
   ]);
 
   assert.match(sidebar, /AgenticOS/);
-  assert.match(sidebar, /Settings/);
+  assert.match(sidebar, /workspaceNavigation/);
+  assert.match(navigation, /Settings/);
+  assert.match(navigation, /Integrations/);
+  assert.match(navigation, /Analytics/);
   assert.match(app, /SettingsModule/);
+  assert.match(app, /IntegrationsModule/);
+  assert.match(app, /AnalyticsModule/);
   assert.doesNotMatch(`${app}\n${sidebar}`, /AI Agent Platform|isAgentPlatformSurface|sidebar-agent-platform/);
   assert.doesNotMatch(`${app}\n${agentsCss}`, /app-shell-agents|dashboard-agents/);
 });
 
 test("overview, task, and agent controls avoid stale mock runtime values", async () => {
   const [app, map, tasks, topbar, agents] = await Promise.all([
-    readFile(new URL("../apps/desktop/src/renderer/App.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../apps/desktop/src/renderer/map/WorkspaceMap3D.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../apps/desktop/src/renderer/tasks/TasksModule.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../apps/desktop/src/renderer/components/TopBar.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../apps/desktop/src/renderer/agents/AgentsPage.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/renderer/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/renderer/map/WorkspaceMap3D.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/renderer/tasks/TasksModule.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/renderer/components/TopBar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/renderer/agents/AgentsPage.tsx", import.meta.url), "utf8"),
   ]);
 
   const runtimeSource = `${app}\n${map}\n${tasks}\n${topbar}\n${agents}`;
@@ -38,8 +44,7 @@ test("overview, task, and agent controls avoid stale mock runtime values", async
   assert.match(map, /buildErrorRate\(history\)/);
   assert.match(topbar, /onNavigate/);
   assert.match(topbar, /setNotificationsOpen/);
-  assert.match(agents, /setNotificationsOpen/);
-  assert.match(agents, /workspaceInitials/);
+  assert.doesNotMatch(agents, /setNotificationsOpen|workspaceInitials|agent-notification-button|agent-user-button/);
   assert.match(agents, /formatDuration\(totalMs\)/);
   assert.match(agents, /onToggleExpanded/);
 });

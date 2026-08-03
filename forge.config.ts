@@ -36,20 +36,20 @@ const config: ForgeConfig = {
     new VitePlugin({
       build: [
         {
-          entry: "apps/desktop/src/main/main.ts",
-          config: "apps/desktop/vite.main.config.ts",
+          entry: "src/main/main.ts",
+          config: "vite.main.config.ts",
           target: "main",
         },
         {
-          entry: "apps/desktop/src/preload/preload.ts",
-          config: "apps/desktop/vite.preload.config.ts",
+          entry: "src/preload/preload.ts",
+          config: "vite.preload.config.ts",
           target: "preload",
         },
       ],
       renderer: [
         {
           name: "main_window",
-          config: "apps/desktop/vite.renderer.config.ts",
+          config: "vite.renderer.config.ts",
         },
       ],
     }),

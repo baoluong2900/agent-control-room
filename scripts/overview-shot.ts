@@ -38,6 +38,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const harnessSecretStorage = {
   isEncryptionAvailable: () => true,
   encryptString: (plainText: string) => Buffer.from(plainText, "utf8"),
+  decryptString: (cipherText: Buffer) => cipherText.toString("utf8"),
 };
 
 async function main() {

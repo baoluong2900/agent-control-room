@@ -45,6 +45,8 @@ yarn-error.log*
 # typescript
 next-env.d.ts
 /dist/
+# Vite writes the renderer bundle here; the root /dist/ rule does not reach it.
+/src/renderer/dist/
 /.wrangler/
 /outputs/
 /work/
@@ -54,3 +56,6 @@ next-env.d.ts
 
 # local tooling state
 /.openai/
+
+# local scratch probes
+/.probe/

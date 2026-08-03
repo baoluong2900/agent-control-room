@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DesktopDatabase } from "../apps/desktop/src/main/database/desktop-database.ts";
-import { AgentProcessManager } from "../apps/desktop/src/main/processes/agent-process-manager.ts";
-import { TaskAutomationService } from "../apps/desktop/src/main/tasks/task-automation-service.ts";
-import { buildTaskPlan } from "../apps/desktop/src/main/tasks/task-planner.ts";
+import { DesktopDatabase } from "../src/main/database/desktop-database.ts";
+import { AgentProcessManager } from "../src/main/processes/agent-process-manager.ts";
+import { TaskAutomationService } from "../src/main/tasks/task-automation-service.ts";
+import { buildTaskPlan } from "../src/main/tasks/task-planner.ts";
 
 test("task planner splits scheduled requirements across multiple agent roles", () => {
   const dueAt = new Date(Date.now() + 60 * 60_000).toISOString();

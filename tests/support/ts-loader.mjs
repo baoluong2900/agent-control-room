@@ -6,8 +6,8 @@ import { dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
-const root = fileURLToPath(new URL("../", import.meta.url));
-const contractsDir = resolvePath(root, "packages/contracts");
+const root = fileURLToPath(new URL("../../", import.meta.url));
+const contractsDir = resolvePath(root, "src/contracts");
 
 const fileExtensions = [".ts", ".tsx", ".mjs", ".js", ".cjs", ".json"];
 const indexExtensions = [".ts", ".tsx", ".js"];

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import type { WorkflowSaveInput } from "@contracts";
-import { WorkflowRepository } from "../apps/desktop/src/main/database/workflow-repository.ts";
+import { WorkflowRepository } from "../src/main/database/workflow-repository.ts";
 
 function freshRepo(): WorkflowRepository {
   return freshRepoWithDb().repo;
