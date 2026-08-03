@@ -7,6 +7,7 @@ import type {
   AgentProfile,
   AgentProfileInput,
   AgentModuleId,
+  AgentOptionValues,
   AgentProfileStats,
   AgentPromptMode,
   KnowledgeCodeGraph,
@@ -47,6 +48,7 @@ type ProfileRow = {
   autoApprove: number;
   enabled: number;
   tags: string | null;
+  options: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -683,8 +685,8 @@ export class DesktopDatabase {
       .prepare(
         `insert into agent_profiles
            (id, name, role, cli_id, module, model, provider_connection_id, accent, cwd, system_prompt, extra_args, command_override,
-            prompt_mode, interactive, force_tty, auto_approve, enabled, tags, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            prompt_mode, interactive, force_tty, auto_approve, enabled, tags, options, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(id) do update set
            name = excluded.name,
            role = excluded.role,
@@ -703,6 +705,7 @@ export class DesktopDatabase {
            auto_approve = excluded.auto_approve,
            enabled = excluded.enabled,
            tags = excluded.tags,
+           options = excluded.options,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -724,6 +727,7 @@ export class DesktopDatabase {
         input.autoApprove ? 1 : 0,
         input.enabled === false ? 0 : 1,
         JSON.stringify(input.tags ?? []),
+        JSON.stringify(input.options ?? {}),
         existing?.createdAt ?? now,
         now,
       );
@@ -755,6 +759,7 @@ export class DesktopDatabase {
            auto_approve as autoApprove,
            enabled,
            tags,
+           options,
            created_at as createdAt,
            updated_at as updatedAt
          from agent_profiles
@@ -783,6 +788,7 @@ export class DesktopDatabase {
       autoApprove: row.autoApprove === 1,
       enabled: row.enabled === 1,
       tags: parseTags(row.tags),
+      options: parseOptions(row.options),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       stats: stats.get(row.id) ?? emptyStats,
@@ -969,6 +975,7 @@ export class DesktopDatabase {
         auto_approve integer not null default 0,
         enabled integer not null default 1,
         tags text,
+        options text,
         created_at text not null,
         updated_at text not null
       );
@@ -1063,6 +1070,7 @@ export class DesktopDatabase {
     this.ensureColumn("agent_runs", "conversation_id", "text");
     this.ensureColumn("agent_profiles", "provider_connection_id", "text");
     this.ensureColumn("agent_profiles", "module", "text");
+    this.ensureColumn("agent_profiles", "options", "text");
     ensureColumns(this.db, "tasks", [
       { name: "parent_task_id", ddl: "text" },
       { name: "assigned_cli_id", ddl: "text" },
@@ -1153,8 +1161,31 @@ function parseTags(raw: string | null): string[] {
   }
 }
 
-function parseJsonArray<T>(raw: string): T[] {
+/**
+ * Option values are declared per CLI descriptor, so a stored profile can hold keys
+ * the current catalog no longer declares. Keep whatever still matches the
+ * `AgentOptionValue` union and drop the rest rather than surfacing junk to the UI.
+ */
+function parseOptions(raw: string | null): AgentOptionValues {
+  if (!raw) return {};
   try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const values: AgentOptionValues = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string" || typeof value === "boolean") {
+        values[key] = value;
+      } else if (Array.isArray(value)) {
+        values[key] = value.filter((entry): entry is string => typeof entry === "string");
+      }
+    }
+    return values;
+  } catch {
+    return {};
+  }
+}
+
+function parseJsonArray<T>(raw: string): T[] {  try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as T[]) : [];
   } catch {
