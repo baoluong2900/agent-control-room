@@ -71,6 +71,20 @@ app đang thoát.
 
 Cách sửa: đánh dấu manager là đang shutdown để handler `exit` không ghi DB nữa.
 
+### B4 — `AgentProfile.options` khai báo nhưng không có chỗ lưu (nghiêm trọng)
+
+`src/main/database/desktop-database.ts`
+
+`AgentProfile.options` là field **bắt buộc** trong contract, nhưng không có tầng lưu
+nào đứng sau nó: bảng `agent_profiles` không có cột, câu insert không ghi, và
+`listAgentProfiles` không hydrate. Kết quả là `desktop-database.ts` không compile
+được so với chính kiểu trả về của nó — `npm run typecheck` fail.
+
+Cách sửa: thêm cột (kèm `ensureColumn` để nâng cấp file database cũ), ghi khi save,
+hydrate khi read. `parseOptions` viết theo đúng khuôn `parseTags` và chỉ giữ giá trị
+khớp union `AgentOptionValue`, vì profile đã lưu có thể sống lâu hơn các key mà
+catalog hiện tại còn khai báo.
+
 ## 3. Kế hoạch thực hiện
 
 **Phase 1 — Sửa lỗi vòng đời (đã xong)**
@@ -81,6 +95,9 @@ bằng cách tạm revert bản sửa và xem test mới fail đúng như mô t�
 B1 -> actual 'failed' / expected 'stopped'
 B3 -> Error: database is not open (ERR_INVALID_STATE)
 ```
+
+B4 được sửa trong commit `a9f8a3b`, kiểm chứng bằng round-trip qua sqlite thật:
+options lưu rồi đọc lại đúng nguyên giá trị, profile không có options đọc ra `{}`.
 
 **Phase 2 — Chốt bằng test hồi quy (đã xong)**
 `tests/agent-process-lifecycle.test.ts` phủ ba tình huống trên và đã được thêm vào
