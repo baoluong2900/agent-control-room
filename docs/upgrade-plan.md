@@ -73,24 +73,37 @@ Cách sửa: đánh dấu manager là đang shutdown để handler `exit` không
 
 ## 3. Kế hoạch thực hiện
 
-**Phase 1 — Sửa lỗi vòng đời (đang làm)**
-Xử lý B1, B2, B3. Đây là các lỗi ảnh hưởng trực tiếp tới trạng thái người dùng
-nhìn thấy và tới độ ổn định khi đóng cửa sổ / thoát app.
+**Phase 1 — Sửa lỗi vòng đời (đã xong)**
+Đã xử lý B1, B2, B3 trong commit `ebd7254`. Cả ba đều được chứng minh là bug thật
+bằng cách tạm revert bản sửa và xem test mới fail đúng như mô tả:
 
-**Phase 2 — Chốt bằng test hồi quy**
-Bổ sung test cho đúng ba tình huống trên, vì cả ba đều lọt qua bộ test hiện tại:
-dừng agent phải giữ `stopped`; emit khi không có window không được ném; handler
-`exit` sau shutdown không ghi DB.
+```text
+B1 -> actual 'failed' / expected 'stopped'
+B3 -> Error: database is not open (ERR_INVALID_STATE)
+```
 
-**Phase 3 — Thu hẹp khoảng trống kiểm chứng**
-Bộ test hiện tại mạnh ở tầng database, workflow và schedule, nhưng gần như không
-chạm tới `agent-process-manager` và vòng đời window — đó chính là nơi cả ba bug
-nằm. Ưu tiên tiếp theo nên là phủ test cho tầng này.
+**Phase 2 — Chốt bằng test hồi quy (đã xong)**
+`tests/agent-process-lifecycle.test.ts` phủ ba tình huống trên và đã được thêm vào
+`npm test`. Bộ test tăng từ 76 lên 79 và pass toàn bộ.
+
+**Phase 3 — Thu hẹp khoảng trống kiểm chứng (đề xuất tiếp theo)**
+Bộ test mạnh ở tầng database, workflow và schedule, nhưng trước Phase 2 thì
+`agent-process-manager` và vòng đời window gần như không được phủ — đó chính là nơi
+cả ba bug nằm. Việc còn thiếu, xếp theo mức độ đáng làm:
+
+* Phủ test cho `WorkflowService.spawnStep`: nhánh timeout `SIGTERM` chỉ log rồi để
+  handler `exit` quyết định status, chưa có test nào chạy vào nhánh này.
+* Phủ test cho vòng đời window: hiện `activeWebContents()` đúng theo review code
+  nhưng chưa có test tự động nào giữ nó khỏi hồi quy.
 
 ## 4. Cách kiểm chứng
 
+Tất cả các lệnh dưới đây đã được chạy thật sau khi sửa và đều pass:
+
 ```bash
-npm run typecheck     # type cho src/, scripts/, tests/
-npm test              # typecheck + 76 test hiện có + test mới
-npm run package       # đảm bảo build đóng gói không vỡ
+npm run typecheck        # clean
+npm test                 # 79/79 pass
+npm run package          # build macOS arm64 thành công
+npm run verify:agents    # ALL CHECKS PASSED
+npm run verify:agents:proc  # ALL CHECKS PASSED (gồm "stopped status recorded")
 ```
