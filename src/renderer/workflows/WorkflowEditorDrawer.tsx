@@ -19,10 +19,13 @@ import type {
 import {
   cliLabels,
   cliOptions,
+  isLocallyRunnableTrigger,
+  locallyRunnableTriggerTypes,
   stepKindMeta,
   stepKinds,
   triggerMeta,
   triggerTypes,
+  unsupportedTriggerCopy,
 } from "./workflow-ui";
 import { useAgentsStore } from "../stores/agents-store";
 
@@ -184,6 +187,14 @@ export function WorkflowEditorDrawer({
       setError("Add at least one step.");
       return;
     }
+    if (!isLocallyRunnableTrigger(draft.triggerType)) {
+      setError(unsupportedTriggerCopy[draft.triggerType] ?? "This trigger is not available in the local runner yet.");
+      return;
+    }
+    if (draft.triggerType === "file-change" && !draft.projectPath.trim()) {
+      setError("File-change workflows need a project folder to watch.");
+      return;
+    }
 
     setSaving(true);
     setError(null);
@@ -304,11 +315,14 @@ export function WorkflowEditorDrawer({
                   value={draft.triggerType}
                   onChange={(event) => patch({ triggerType: event.target.value as WorkflowTriggerType })}
                 >
-                  {triggerTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {triggerMeta[type].label}
-                    </option>
-                  ))}
+                  {triggerTypes.map((type) => {
+                    const unsupported = !locallyRunnableTriggerTypes.includes(type);
+                    return (
+                      <option key={type} value={type} disabled={unsupported}>
+                        {triggerMeta[type].label}{unsupported ? " (unsupported)" : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               </label>
               <label className="wf-field">
@@ -323,10 +337,17 @@ export function WorkflowEditorDrawer({
                 <span>Detail</span>
                 <input
                   value={draft.triggerDetail}
-                  placeholder="GitHub • main, Jira • BUG board…"
+                  placeholder={draft.triggerType === "file-change" ? "src/**, package.json" : "GitHub • main, Jira • BUG board…"}
                   onChange={(event) => patch({ triggerDetail: event.target.value })}
                 />
               </label>
+              {draft.triggerType === "file-change" ? (
+                <p className="wf-field-hint wf-col-2">
+                  Watches the project folder above. Detail is optional; use comma-separated relative files or globs.
+                </p>
+              ) : unsupportedTriggerCopy[draft.triggerType] ? (
+                <p className="wf-field-hint wf-col-2">{unsupportedTriggerCopy[draft.triggerType]}</p>
+              ) : null}
             </div>
           </section>
 

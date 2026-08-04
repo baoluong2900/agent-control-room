@@ -194,6 +194,63 @@ test("runDueWorkflows leaves a schedule alone until its next slot after the last
   assert.deepEqual(await scheduler.runDueWorkflows(new Date()), []);
 });
 
+test("runFileChangeWorkflows fires active file-change workflows in the changed project", async () => {
+  const { scheduler, service, repo } = freshScheduler();
+  const workflow = repo.save(
+    scheduledWorkflow({
+      name: "Watch source",
+      trigger: { type: "file-change", detail: "src/**, package.json" },
+      projectPath: process.cwd(),
+    }),
+  );
+
+  const fired = await scheduler.runFileChangeWorkflows(`${process.cwd()}/src/main/workflows/workflow-scheduler.ts`);
+
+  assert.deepEqual(fired, [workflow.id]);
+  const runs = service.runs(workflow.id);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].triggeredBy, "file-change");
+});
+
+test("runFileChangeWorkflows ignores unsupported, paused, out-of-project and non-matching changes", async () => {
+  const { scheduler, repo } = freshScheduler();
+
+  repo.save(scheduledWorkflow({ name: "Paused", status: "paused", trigger: { type: "file-change" }, projectPath: process.cwd() }));
+  repo.save(scheduledWorkflow({ name: "Manual", trigger: { type: "manual" }, projectPath: process.cwd() }));
+  repo.save(scheduledWorkflow({ name: "No project", trigger: { type: "file-change" }, projectPath: null }));
+  repo.save(
+    scheduledWorkflow({
+      name: "Wrong file",
+      trigger: { type: "file-change", detail: "docs/**" },
+      projectPath: process.cwd(),
+    }),
+  );
+
+  assert.deepEqual(await scheduler.runFileChangeWorkflows(`${process.cwd()}/src/main/index.ts`), []);
+  assert.deepEqual(await scheduler.runFileChangeWorkflows("/tmp/outside-project.ts"), []);
+});
+
+test("runFileChangeWorkflows debounces duplicate changes for the same workflow", async () => {
+  const { scheduler, service, repo } = freshScheduler();
+  const workflow = repo.save(
+    scheduledWorkflow({
+      name: "Watch any file",
+      trigger: { type: "file-change" },
+      projectPath: process.cwd(),
+    }),
+  );
+
+  const changed = `${process.cwd()}/README.md`;
+  const first = new Date("2026-07-30T10:00:00.000Z");
+  const duplicate = new Date(first.getTime() + 500);
+  const later = new Date(first.getTime() + 1_500);
+
+  assert.deepEqual(await scheduler.runFileChangeWorkflows(changed, first), [workflow.id]);
+  assert.deepEqual(await scheduler.runFileChangeWorkflows(changed, duplicate), []);
+  assert.deepEqual(await scheduler.runFileChangeWorkflows(changed, later), [workflow.id]);
+  assert.equal(service.runs(workflow.id).length, 2);
+});
+
 test("stop is safe to call without start and start only arms one timer", () => {
   const { scheduler } = freshScheduler();
   scheduler.stop();

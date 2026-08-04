@@ -51,6 +51,18 @@ export const triggerMeta: Record<WorkflowTriggerType, { label: string; icon: Luc
 
 export const triggerTypes = Object.keys(triggerMeta) as WorkflowTriggerType[];
 
+export const locallyRunnableTriggerTypes: WorkflowTriggerType[] = ["manual", "schedule", "file-change"];
+
+export const unsupportedTriggerCopy: Partial<Record<WorkflowTriggerType, string>> = {
+  "git-push": "Git push needs a Git provider webhook before it can run locally.",
+  "issue-created": "Issue-created needs a tracker integration before it can run locally.",
+  webhook: "Webhook needs an inbound HTTP listener before it can run locally.",
+};
+
+export function isLocallyRunnableTrigger(type: WorkflowTriggerType): boolean {
+  return locallyRunnableTriggerTypes.includes(type);
+}
+
 export const cliLabels: Record<AgentCliId, string> = {
   claude: "Claude",
   kiro: "Kiro",
