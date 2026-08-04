@@ -20,7 +20,10 @@ function freshScheduler(): {
   // one is active. Leaving them in place would make every tick below spawn their
   // real agent CLIs, so start the scheduler against an empty catalogue.
   for (const seeded of repo.list()) repo.remove(seeded.id);
-  const service = new WorkflowService({ workflows: repo } as never, () => null);
+  const service = new WorkflowService(
+    { workflows: repo, listAgentProfiles: () => [], listProviderConnections: () => [] } as never,
+    () => null,
+  );
   const scheduler = new WorkflowSchedulerService(service, () => null);
   return { scheduler, service, repo };
 }

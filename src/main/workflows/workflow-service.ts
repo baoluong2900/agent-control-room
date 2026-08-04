@@ -540,7 +540,15 @@ export class WorkflowService {
     let status: WorkflowRunStatus = "success";
     let exitCode: number | null = 0;
     let output = "";
-    const instruction = applyStepContext(step.instruction, outcomes);
+    // A shell step executes its text, so auto-appending prose context would hand
+    // the shell lines to run. An agent step gets the prompt-friendly treatment.
+    const runsAsShell = (profile?.cliId ?? step.cliId) === "shell";
+    const instruction = applyStepContext(step.instruction, outcomes, {
+      appendWhenNoPlaceholder: !runsAsShell,
+    });
+    const shellCommand = step.shellCommand?.trim()
+      ? applyStepContext(step.shellCommand, outcomes, { appendWhenNoPlaceholder: false })
+      : step.shellCommand;
 
     if (dryRun) {
       output = `[dry-run] ${instruction}`;
@@ -550,6 +558,7 @@ export class WorkflowService {
         step,
         profile,
         instruction,
+        shellCommand,
         cwd,
         runId,
         workflowId: workflow.id,
@@ -591,11 +600,12 @@ export class WorkflowService {
     step: WorkflowStepDefinition;
     profile?: AgentProfile;
     instruction: string;
+    shellCommand?: string;
     cwd: string;
     runId: string;
     workflowId: string;
   }): Promise<{ status: WorkflowRunStatus; exitCode: number | null; output: string }> {
-    const { step, profile, instruction, cwd, runId, workflowId } = params;
+    const { step, profile, instruction, shellCommand, cwd, runId, workflowId } = params;
     const cliId = profile?.cliId ?? step.cliId;
 
     return new Promise((resolve) => {
@@ -604,7 +614,7 @@ export class WorkflowService {
         let providerEnv: NodeJS.ProcessEnv = {};
         try {
           if (cliId === "shell") {
-            invocation = shellInvocation(step.shellCommand?.trim() || instruction);
+            invocation = shellInvocation(shellCommand?.trim() || instruction);
           } else {
             invocation = await buildInvocation({
               cliId,
@@ -612,7 +622,7 @@ export class WorkflowService {
               prompt: instruction,
               // An explicit step model wins; otherwise the profile's model applies.
               model: step.model.trim() || profile?.model,
-              shellCommand: step.shellCommand,
+              shellCommand,
               profileId: profile?.id,
               providerConnectionId: step.providerConnectionId ?? profile?.providerConnectionId,
               systemPrompt: profile?.systemPrompt,
@@ -622,16 +632,18 @@ export class WorkflowService {
               autoApprove: profile?.autoApprove,
               options: profile?.options,
             });
-
-            // Workflow steps are one-shot and headless, so they never force a TTY —
-            // but they do need the same credentials an interactive agent run gets.
-            // A `shell` step runs no provider CLI, so it is skipped entirely.
-            providerEnv = resolveProviderEnv(this.db, this.secretVault, {
-              cliId,
-              profileId: profile?.id,
-              providerConnectionId: step.providerConnectionId ?? profile?.providerConnectionId,
-            });
           }
+
+          // Workflow steps are one-shot and headless, so they never force a TTY —
+          // but they do need the same credentials an interactive agent run gets.
+          // This covers `shell` steps too: a bare one resolves to no connection
+          // anyway, and one bound to a profile is usually a script that shells out
+          // to that provider's CLI, which is exactly the agent path's behaviour.
+          providerEnv = resolveProviderEnv(this.db, this.secretVault, {
+            cliId,
+            profileId: profile?.id,
+            providerConnectionId: step.providerConnectionId ?? profile?.providerConnectionId,
+          });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           this.emit({

@@ -533,6 +533,23 @@
   color: #d2c4fc;
 }
 
+/* Not yet checked — informational, so it reads cooler than the amber "expired". */
+.status-unverified {
+  background: rgba(46, 135, 244, 0.13);
+  color: #7fb4f5;
+}
+
+/* Verification copy can be a full sentence; keep it to one line with a tooltip.
+   Overrides the flex-row `small` above, which this element also matches. */
+.provider-connection-copy small.provider-connection-detail {
+  color: rgba(210, 196, 252, 0.62);
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .provider-connection-actions {
   display: flex;
   flex-wrap: wrap;

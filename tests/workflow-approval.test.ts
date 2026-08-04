@@ -6,14 +6,20 @@ import { WorkflowRepository } from "../src/main/database/workflow-repository.ts"
 import { WorkflowService } from "../src/main/workflows/workflow-service.ts";
 
 /**
- * The service only touches `db.workflows`, so a repository wrapper is enough to
- * exercise the approval gate without booting Electron or the full database.
+ * The service only touches `db.workflows` plus the two lookups the provider
+ * resolver needs, so a repository wrapper is enough to exercise the approval gate
+ * without booting Electron or the full database. The empty provider/profile lists
+ * make every step here resolve to no credentials, which is what an unbound shell
+ * step should do — `workflow-agent-binding.test.ts` covers the bound case.
  */
 function freshService(): { service: WorkflowService; repo: WorkflowRepository } {
   const db = new DatabaseSync(":memory:");
   const repo = new WorkflowRepository(db as never);
   repo.migrate();
-  const service = new WorkflowService({ workflows: repo } as never, () => null);
+  const service = new WorkflowService(
+    { workflows: repo, listAgentProfiles: () => [], listProviderConnections: () => [] } as never,
+    () => null,
+  );
   return { service, repo };
 }
 

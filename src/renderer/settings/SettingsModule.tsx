@@ -94,11 +94,13 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
 
   const summary = useMemo(() => {
     const connected = connections.filter((connection) => connection.status === "connected").length;
+    const unverified = connections.filter((connection) => connection.status === "unverified").length;
     const expired = connections.filter((connection) => connection.status === "expired").length;
     const apiKeys = connections.filter((connection) => connection.authMode === "api-key").length;
     return {
       signedIn: identity.status === "signed-in" ? 1 : 0,
       connected,
+      unverified,
       expired,
       apiKeys,
     };
@@ -247,6 +249,20 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
     }
   }
 
+  async function verifyConnection(connection: ProviderConnection) {
+    setBusyConnectionId(connection.id);
+    setError(null);
+    try {
+      const result = await window.agentic.settings.verifyProviderConnection(connection.id);
+      setConnections((current) => current.map((item) => (item.id === result.connectionId ? result.connection : item)));
+      showBanner(result.detail, result.outcome === "verified" ? "success" : "idle");
+    } catch (nextError) {
+      setError(formatError(nextError));
+    } finally {
+      setBusyConnectionId(null);
+    }
+  }
+
   async function removeConnection(connection: ProviderConnection) {
     setBusyConnectionId(connection.id);
     setError(null);
@@ -300,6 +316,7 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
         <section className="settings-stats" aria-label="Identity summary">
           <StatPill label="Local sign-in" value={summary.signedIn ? "Signed in" : "Signed out"} tone="cyan" />
           <StatPill label="Connected" value={summary.connected} tone="green" />
+          <StatPill label="Unverified" value={summary.unverified} tone="cyan" />
           <StatPill label="Expired" value={summary.expired} tone="amber" />
           <StatPill label="API keys" value={summary.apiKeys} tone="purple" />
         </section>
@@ -404,7 +421,12 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
             <div className="settings-route-list">
               {providerCatalog.map((entry) => {
                 const connectionsForProvider = connectedByProvider.get(entry.provider) ?? [];
-                const active = connectionsForProvider.find((connection) => connection.status === "connected");
+                // "unverified" counts as configured here: the routing row reports
+                // whether a provider has a usable connection, and an unchecked one
+                // is what every connection looks like before Verify is clicked.
+                const active = connectionsForProvider.find(
+                  (connection) => connection.status === "connected" || connection.status === "unverified",
+                );
                 const Icon = entry.icon;
                 return (
                   <div key={entry.provider} className="settings-route-row">
@@ -513,8 +535,21 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
                                 <span>{connection.authMode.replace("-", " ")}</span>
                                 {connection.quotaLabel && <span>{connection.quotaLabel}</span>}
                               </small>
+                              {connection.verificationDetail && (
+                                <small className="provider-connection-detail" title={connection.verificationDetail}>
+                                  {connection.verificationDetail}
+                                </small>
+                              )}
                             </div>
                             <div className="provider-connection-actions">
+                              <button
+                                className="settings-mini-button"
+                                onClick={() => void verifyConnection(connection)}
+                                disabled={isBusy}
+                              >
+                                {isBusy ? <Loader2 size={13} className="spin" /> : <ShieldCheck size={13} />}
+                                Verify
+                              </button>
                               <button
                                 className="settings-mini-button"
                                 onClick={() => void reconnectProvider(connection)}
