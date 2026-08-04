@@ -71,7 +71,7 @@ export const workspaceNavigation: WorkspaceNavigationItem[] = [
     key: "Integrations",
     label: "Integrations",
     icon: Network,
-    summary: "Providers, CLIs, local gateway",
+    summary: "Providers, CLIs, proxy endpoints",
   },
   {
     key: "Analytics",

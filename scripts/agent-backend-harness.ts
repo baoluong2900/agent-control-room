@@ -68,6 +68,52 @@ async function main() {
     `${customRun.executable} ${customRun.args.join(" ")}`,
   );
 
+  const agyRun = await buildInvocation({
+    cliId: "agy",
+    cwd: process.cwd(),
+    prompt: "ship it",
+    commandOverride: "/bin/echo",
+    model: "default",
+    autoApprove: true,
+    options: {
+      effort: "high",
+      mode: "plan",
+      sandbox: true,
+      agent: "ops",
+      addDir: ["/tmp/work-a", "/tmp/work-b"],
+    },
+  });
+  check(
+    "agy emits declared options",
+    agyRun.args.includes("--dangerously-skip-permissions") &&
+      agyRun.args.includes("--effort") &&
+      agyRun.args.includes("high") &&
+      agyRun.args.includes("--mode") &&
+      agyRun.args.includes("plan") &&
+      agyRun.args.includes("--sandbox") &&
+      agyRun.args.filter((arg) => arg === "--add-dir").length === 2,
+    `${agyRun.executable} ${agyRun.args.join(" ")}`,
+  );
+  check("agy sentinel model omits --model", !agyRun.args.includes("--model"), agyRun.args.join(" "));
+
+  const claudeRun = await buildInvocation({
+    cliId: "claude",
+    cwd: process.cwd(),
+    prompt: "review",
+    commandOverride: "/bin/echo",
+    systemPrompt: "Keep diffs small.",
+    options: { permissionMode: "plan", allowedTools: ["Read", "Grep"] },
+  });
+  check(
+    "claude emits system prompt and list options",
+    claudeRun.args.includes("--append-system-prompt") &&
+      claudeRun.args.includes("Keep diffs small.") &&
+      claudeRun.args.includes("--permission-mode") &&
+      claudeRun.args.includes("plan") &&
+      claudeRun.args.filter((arg) => arg === "--allowed-tools").length === 2,
+    `${claudeRun.executable} ${claudeRun.args.join(" ")}`,
+  );
+
   // 4. Ping all CLIs
   const pings = await pingAllAgentClis();
   check("pingAll returns a result per CLI", pings.length === catalog.length - 1, `${pings.length} results`);
@@ -118,10 +164,13 @@ async function main() {
     cwd: process.cwd(),
     interactive: true,
     forceTty: false,
+    autoApprove: true,
+    options: { effort: "high", addDir: ["/tmp/harness"] },
     tags: ["AWS", "test"],
   });
   check("profile saved", saved.id.length > 0 && saved.name === "Harness Agent", saved.id);
   check("profile defaults", saved.enabled && saved.interactive && saved.tags.length === 2, JSON.stringify(saved.tags));
+  check("profile stores runtime flags", saved.autoApprove && saved.options.effort === "high", JSON.stringify(saved.options));
 
   const renamed = db.saveAgentProfile({ ...saved, name: "Harness Agent v2", role: saved.role });
   check("profile updated in place", db.listAgentProfiles().length === 1 && renamed.name === "Harness Agent v2");

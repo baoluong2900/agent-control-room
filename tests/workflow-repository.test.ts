@@ -98,6 +98,21 @@ test("migrate is idempotent and does not duplicate seeds", () => {
   assert.equal(repo.list().length, 5);
 });
 
+test("deleted seed workflows stay deleted after a restart", () => {
+  const db = new DatabaseSync(":memory:");
+  const repo = new WorkflowRepository(db as never);
+  repo.migrate();
+
+  for (const workflow of repo.list()) {
+    repo.remove(workflow.id);
+  }
+  assert.equal(repo.list().length, 0);
+
+  const reopened = new WorkflowRepository(db as never);
+  reopened.migrate();
+  assert.equal(reopened.list().length, 0);
+});
+
 test("save creates a workflow with ordered steps and parsed integrations", () => {
   const repo = freshRepo();
   const saved = repo.save(sampleInput);

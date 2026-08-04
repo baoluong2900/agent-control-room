@@ -344,9 +344,15 @@ function buildCodeGraph(files: KnowledgeFileInsight[]): KnowledgeCodeGraph {
     }
   }
 
+  const cappedNodes = [...nodes.values()].slice(0, 1_200);
+  const retainedNodeIds = new Set(cappedNodes.map((node) => node.id));
+  const cappedEdges = [...edges.values()]
+    .filter((edge) => retainedNodeIds.has(edge.source) && retainedNodeIds.has(edge.target))
+    .slice(0, 2_400);
+
   return {
-    nodes: [...nodes.values()].slice(0, 1_200),
-    edges: [...edges.values()].slice(0, 2_400),
+    nodes: cappedNodes,
+    edges: cappedEdges,
   };
 }
 
@@ -725,10 +731,14 @@ function formatBytes(bytes: number): string {
 }
 
 function xmlEscape(value: string): string {
-  return value
+  return stripInvalidXmlChars(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+function stripInvalidXmlChars(value: string): string {
+  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
 }

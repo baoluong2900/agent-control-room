@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import type { WebContents } from "electron";
 import type {
+  AgentProfile,
   WorkflowActivityEntry,
   WorkflowDefinition,
   WorkflowEvent,
@@ -16,11 +17,15 @@ import type {
   WorkflowSaveInput,
   WorkflowStatus,
   WorkflowStepDefinition,
+  WorkflowStepOutcome,
   WorkflowStepRunRecord,
 } from "@contracts";
 import { buildInvocation, cliDisplayNames, quoteCommand, shellInvocation } from "../agents/commands";
+import { resolveProviderEnv } from "../agents/provider-resolver";
 import type { DesktopDatabase } from "../database/desktop-database";
 import type { WorkflowRepository } from "../database/workflow-repository";
+import type { ProviderSecretVault } from "../settings/provider-secret-vault";
+import { applyStepContext } from "./step-context";
 
 type RunningWorkflow = {
   cancelled: boolean;
@@ -46,6 +51,8 @@ type PendingApproval = {
   remaining: WorkflowStepDefinition[];
   /** Set when the gated step still has to run after being approved. */
   approvedStepId?: string;
+  /** Outputs collected before the gate, so context survives the pause. */
+  outcomes: WorkflowStepOutcome[];
 };
 
 export class WorkflowService {
@@ -56,6 +63,7 @@ export class WorkflowService {
   constructor(
     private readonly db: DesktopDatabase,
     private readonly webContentsProvider: () => WebContents | null,
+    private readonly secretVault?: ProviderSecretVault,
   ) {
     this.repo = db.workflows;
   }
@@ -270,6 +278,7 @@ export class WorkflowService {
       dryRun: pending.dryRun,
       runStart: pending.runStart,
       skipGateStepId: pending.approvedStepId,
+      outcomes: pending.outcomes,
     });
   }
 
@@ -338,8 +347,10 @@ export class WorkflowService {
     dryRun?: boolean;
     runStart: number;
     skipGateStepId?: string;
+    outcomes?: WorkflowStepOutcome[];
   }): Promise<WorkflowRunRecord> {
     const { workflow, runId, steps, cwd, dryRun, runStart, skipGateStepId } = params;
+    const outcomes: WorkflowStepOutcome[] = [...(params.outcomes ?? [])];
     let finalStatus: WorkflowRunStatus = "success";
 
     for (let index = 0; index < steps.length; index += 1) {
@@ -359,6 +370,7 @@ export class WorkflowService {
           cwd,
           dryRun,
           runStart,
+          outcomes,
         });
         return this.repo.getRun(runId)!;
       }
@@ -366,12 +378,20 @@ export class WorkflowService {
       // `approval` steps carry no command, so an approved gate has nothing to run.
       if (step.kind === "approval") continue;
 
-      const stepStatus = await this.runStep({ workflow, step, runId, cwd, dryRun });
-      if (stepStatus === "failed" && !step.continueOnError) {
+      const result = await this.runStep({ workflow, step, runId, cwd, dryRun, outcomes });
+      outcomes.push({
+        stepId: step.id,
+        name: step.name,
+        kind: step.kind,
+        status: result.status,
+        output: result.output,
+      });
+
+      if (result.status === "failed" && !step.continueOnError) {
         finalStatus = "failed";
         break;
       }
-      if (stepStatus === "cancelled") {
+      if (result.status === "cancelled") {
         finalStatus = "cancelled";
         break;
       }
@@ -396,8 +416,9 @@ export class WorkflowService {
     cwd: string;
     dryRun?: boolean;
     runStart: number;
+    outcomes: WorkflowStepOutcome[];
   }): void {
-    const { workflow, runId, step, remaining, cwd, dryRun, runStart } = params;
+    const { workflow, runId, step, remaining, cwd, dryRun, runStart, outcomes } = params;
     const gateStepRunId = randomUUID();
     const startedAt = new Date().toISOString();
 
@@ -423,6 +444,7 @@ export class WorkflowService {
       gateStepRunId,
       remaining,
       approvedStepId: step.kind === "approval" ? undefined : step.id,
+      outcomes,
     });
 
     this.active.delete(runId);
@@ -477,8 +499,9 @@ export class WorkflowService {
     runId: string;
     cwd: string;
     dryRun?: boolean;
-  }): Promise<WorkflowRunStatus> {
-    const { workflow, step, runId, cwd, dryRun } = params;
+    outcomes: WorkflowStepOutcome[];
+  }): Promise<{ status: WorkflowRunStatus; output: string }> {
+    const { workflow, step, runId, cwd, dryRun, outcomes } = params;
     const stepRunId = randomUUID();
     const startedAt = new Date().toISOString();
 
@@ -495,7 +518,11 @@ export class WorkflowService {
     };
     this.repo.createStepRun(stepRun);
 
-    const displayName = cliDisplayNames[step.cliId] ?? step.cliId;
+    const profile = this.resolveStepProfile(step);
+    const effectiveCliId = profile?.cliId ?? step.cliId;
+    const displayName = cliDisplayNames[effectiveCliId] ?? effectiveCliId;
+    const effectiveModel = step.model.trim() || profile?.model?.trim() || "";
+    const runAs = profile ? ` as ${profile.name}` : "";
     this.emit({
       type: "workflow:step-started",
       workflowId: workflow.id,
@@ -503,7 +530,7 @@ export class WorkflowService {
       stepId: step.id,
       stepName: step.name,
       status: "running",
-      message: `▶ ${step.name} · ${displayName}${step.model ? ` (${step.model})` : ""}`,
+      message: `▶ ${step.name} · ${displayName}${effectiveModel ? ` (${effectiveModel})` : ""}${runAs}`,
       timestamp: startedAt,
     });
 
@@ -513,12 +540,20 @@ export class WorkflowService {
     let status: WorkflowRunStatus = "success";
     let exitCode: number | null = 0;
     let output = "";
+    const instruction = applyStepContext(step.instruction, outcomes);
 
     if (dryRun) {
-      output = `[dry-run] ${step.instruction}`;
+      output = `[dry-run] ${instruction}`;
       await delay(180);
     } else {
-      const result = await this.spawnStep({ step, cwd, runId, workflowId: workflow.id });
+      const result = await this.spawnStep({
+        step,
+        profile,
+        instruction,
+        cwd,
+        runId,
+        workflowId: workflow.id,
+      });
       status = result.status;
       exitCode = result.exitCode;
       output = result.output;
@@ -538,30 +573,63 @@ export class WorkflowService {
       timestamp: new Date().toISOString(),
     });
 
-    return status;
+    return { status, output };
+  }
+
+  /**
+   * The agent profile a step runs as, when it names one that still exists and is
+   * enabled. A step pointing at a deleted or disabled profile falls back to its
+   * own `cliId` rather than failing the run.
+   */
+  private resolveStepProfile(step: WorkflowStepDefinition): AgentProfile | undefined {
+    if (!step.profileId) return undefined;
+    const profile = this.db.listAgentProfiles().find((entry) => entry.id === step.profileId);
+    return profile?.enabled ? profile : undefined;
   }
 
   private spawnStep(params: {
     step: WorkflowStepDefinition;
+    profile?: AgentProfile;
+    instruction: string;
     cwd: string;
     runId: string;
     workflowId: string;
   }): Promise<{ status: WorkflowRunStatus; exitCode: number | null; output: string }> {
-    const { step, cwd, runId, workflowId } = params;
+    const { step, profile, instruction, cwd, runId, workflowId } = params;
+    const cliId = profile?.cliId ?? step.cliId;
 
     return new Promise((resolve) => {
       void (async () => {
         let invocation: { executable: string; args: string[]; stdinPrompt?: string };
+        let providerEnv: NodeJS.ProcessEnv = {};
         try {
-          if (step.cliId === "shell") {
-            invocation = shellInvocation(step.shellCommand?.trim() || step.instruction);
+          if (cliId === "shell") {
+            invocation = shellInvocation(step.shellCommand?.trim() || instruction);
           } else {
             invocation = await buildInvocation({
-              cliId: step.cliId,
+              cliId,
               cwd,
-              prompt: step.instruction,
-              model: step.model,
+              prompt: instruction,
+              // An explicit step model wins; otherwise the profile's model applies.
+              model: step.model.trim() || profile?.model,
               shellCommand: step.shellCommand,
+              profileId: profile?.id,
+              providerConnectionId: step.providerConnectionId ?? profile?.providerConnectionId,
+              systemPrompt: profile?.systemPrompt,
+              extraArgs: profile?.extraArgs,
+              commandOverride: profile?.commandOverride,
+              promptMode: profile?.promptMode,
+              autoApprove: profile?.autoApprove,
+              options: profile?.options,
+            });
+
+            // Workflow steps are one-shot and headless, so they never force a TTY —
+            // but they do need the same credentials an interactive agent run gets.
+            // A `shell` step runs no provider CLI, so it is skipped entirely.
+            providerEnv = resolveProviderEnv(this.db, this.secretVault, {
+              cliId,
+              profileId: profile?.id,
+              providerConnectionId: step.providerConnectionId ?? profile?.providerConnectionId,
             });
           }
         } catch (error) {
@@ -589,7 +657,7 @@ export class WorkflowService {
 
         const child = spawn(invocation.executable, invocation.args, {
           cwd,
-          env: { ...process.env, FORCE_COLOR: "1" },
+          env: { ...process.env, ...providerEnv, FORCE_COLOR: "1" },
           windowsHide: true,
         });
 
@@ -712,6 +780,8 @@ function serializeWorkflow(workflow: WorkflowDefinition): WorkflowSaveInput {
       kind: step.kind,
       summary: step.summary,
       cliId: step.cliId,
+      profileId: step.profileId,
+      providerConnectionId: step.providerConnectionId,
       model: step.model,
       instruction: step.instruction,
       shellCommand: step.shellCommand,
@@ -738,6 +808,8 @@ function normalizeImport(parsed: Partial<WorkflowSaveInput> & { name?: string })
       kind: step.kind ?? "execute",
       summary: step.summary ?? "",
       cliId: step.cliId ?? "claude",
+      profileId: step.profileId,
+      providerConnectionId: step.providerConnectionId,
       model: step.model ?? "",
       instruction: step.instruction ?? "",
       shellCommand: step.shellCommand,

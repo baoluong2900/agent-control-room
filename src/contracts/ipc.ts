@@ -20,6 +20,7 @@ import type {
   ProviderConnectionAuthRequest,
   ProviderConnectionAuthResult,
   ProviderConnectionInput,
+  ProviderConnectionVerifyResult,
 } from "./settings";
 import type { SystemDiagnostics } from "./system";
 import type {
@@ -58,6 +59,7 @@ export interface AgenticDesktopApi {
     listProviderConnections: () => Promise<ProviderConnection[]>;
     saveProviderConnection: (input: ProviderConnectionInput) => Promise<ProviderConnection>;
     deleteProviderConnection: (id: string) => Promise<void>;
+    verifyProviderConnection: (id: string) => Promise<ProviderConnectionVerifyResult>;
     openProviderAuth: (input: ProviderConnectionAuthRequest) => Promise<ProviderConnectionAuthResult>;
   };
   agents: {

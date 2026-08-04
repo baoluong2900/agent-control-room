@@ -173,7 +173,7 @@ export function IntegrationsModule({ diagnostics, project, onNavigate, onRefresh
           <section className="integrations-panel">
             <header>
               <div>
-                <h2>Local Gateway Readiness</h2>
+                <h2>Local CLI Readiness</h2>
                 <p>Detected CLIs and missing tools that affect the agent fleet.</p>
               </div>
               <button className="integrations-link" onClick={refresh} type="button">

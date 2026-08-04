@@ -24,6 +24,7 @@ import {
   triggerMeta,
   triggerTypes,
 } from "./workflow-ui";
+import { useAgentsStore } from "../stores/agents-store";
 
 type DraftStep = Omit<WorkflowStepDefinition, "id" | "order"> & { id?: string; key: string };
 
@@ -113,6 +114,14 @@ export function WorkflowEditorDrawer({
   const [activeStepKey, setActiveStepKey] = useState<string>(draft.steps[0]?.key ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const profiles = useAgentsStore((state) => state.profiles);
+  const refreshProfiles = useAgentsStore((state) => state.refreshProfiles);
+
+  // The drawer can be the first place a user opens in a session, so the profile
+  // list is fetched here rather than assumed to be loaded by the agents page.
+  useEffect(() => {
+    if (profiles.length === 0) void refreshProfiles();
+  }, [profiles.length, refreshProfiles]);
 
   useEffect(() => {
     const next = buildInitialState(workflow);
@@ -124,6 +133,11 @@ export function WorkflowEditorDrawer({
   const activeStep = useMemo(
     () => draft.steps.find((step) => step.key === activeStepKey) ?? draft.steps[0],
     [draft.steps, activeStepKey],
+  );
+
+  const activeProfile = useMemo(
+    () => (activeStep?.profileId ? profiles.find((profile) => profile.id === activeStep.profileId) : undefined),
+    [activeStep?.profileId, profiles],
   );
 
   function patch(partial: Partial<DraftState>) {
@@ -197,6 +211,8 @@ export function WorkflowEditorDrawer({
           kind: step.kind,
           summary: step.summary.trim(),
           cliId: step.cliId,
+          profileId: step.profileId,
+          providerConnectionId: step.providerConnectionId,
           model: step.model.trim(),
           instruction: step.instruction.trim(),
           shellCommand: step.shellCommand?.trim() || undefined,
@@ -387,9 +403,30 @@ export function WorkflowEditorDrawer({
                       </select>
                     </label>
                     <label className="wf-field">
+                      <span>Run as agent profile</span>
+                      <select
+                        value={activeStep.profileId ?? ""}
+                        onChange={(event) =>
+                          patchStep(activeStep.key, { profileId: event.target.value || undefined })
+                        }
+                      >
+                        <option value="">No profile — use the CLI below</option>
+                        {profiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.name} · {cliLabels[profile.cliId] ?? profile.cliId}
+                          </option>
+                        ))}
+                      </select>
+                      <small className="wf-field-hint">
+                        A profile supplies its provider connection, system prompt and CLI options, so the step runs
+                        with the same credentials as that agent.
+                      </small>
+                    </label>
+                    <label className="wf-field">
                       <span>AI agent (CLI)</span>
                       <select
                         value={activeStep.cliId}
+                        disabled={Boolean(activeStep.profileId)}
                         onChange={(event) => patchStep(activeStep.key, { cliId: event.target.value as AgentCliId })}
                       >
                         {cliOptions.map((cli) => (
@@ -403,7 +440,7 @@ export function WorkflowEditorDrawer({
                       <span>Model</span>
                       <input
                         value={activeStep.model}
-                        placeholder="claude-sonnet-4.5"
+                        placeholder={activeProfile?.model || "claude-sonnet-4.5"}
                         onChange={(event) => patchStep(activeStep.key, { model: event.target.value })}
                       />
                     </label>

@@ -18,11 +18,15 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { buildOptionArgs } from "@contracts";
 import type {
   AgentCliDescriptor,
   AgentCliId,
+  AgentCliOption,
   AgentModuleId,
   AgentModelOption,
+  AgentOptionValue,
+  AgentOptionValues,
   AgentPingResult,
   AgentProfile,
   AgentProfileInput,
@@ -81,6 +85,7 @@ export function AgentBuilderModal({
   const [interactive, setInteractive] = useState(editing?.interactive ?? true);
   const [forceTty, setForceTty] = useState(editing?.forceTty ?? false);
   const [autoApprove, setAutoApprove] = useState(editing?.autoApprove ?? false);
+  const [optionValues, setOptionValues] = useState<AgentOptionValues>(editing?.options ?? {});
   const [advanced, setAdvanced] = useState(false);
   const [pinging, setPinging] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -104,6 +109,11 @@ export function AgentBuilderModal({
       ),
     [compatibleProviders, providerConnections],
   );
+
+  useEffect(() => {
+    if (!descriptor?.autoApproveArgs?.length) setAutoApprove(false);
+    setOptionValues((current) => sanitizeOptionValues(descriptor, current));
+  }, [descriptor]);
 
   useEffect(() => {
     if (!compatibleProviderConnections.length) {
@@ -166,6 +176,14 @@ export function AgentBuilderModal({
     }
   }, [descriptor, name, selectedModule.name]);
 
+  const visibleOptions = descriptor?.options?.filter((option) => !option.advanced) ?? [];
+  const advancedOptions = descriptor?.options?.filter((option) => option.advanced) ?? [];
+
+  const setCliOption = (option: AgentCliOption, value: AgentOptionValue) => {
+    setOptionValues((current) => ({ ...current, [option.id]: value }));
+    setFormError(null);
+  };
+
   const runPing = async () => {
     setPinging(true);
     setFormError(null);
@@ -218,6 +236,13 @@ export function AgentBuilderModal({
       return;
     }
 
+    try {
+      if (descriptor) buildOptionArgs(descriptor, optionValues, { interactive });
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+
     const payload: AgentProfileInput = {
       id: editing?.id,
       name: name.trim(),
@@ -235,6 +260,7 @@ export function AgentBuilderModal({
       interactive,
       forceTty,
       autoApprove,
+      options: optionValues,
       enabled: editing?.enabled ?? true,
       tags: [descriptor?.vendor ?? "local", moduleTag(moduleId), resolvedModel],
     };
@@ -353,9 +379,28 @@ export function AgentBuilderModal({
             {probe && <p className="hint-line">{probe.detail}</p>}
           </section>
 
+          {visibleOptions.length > 0 && (
+            <section className="modal-section cli-config-section">
+              <div className="section-head">
+                <h3>4. CLI config</h3>
+                <span className="module-selected-pill">{descriptor?.displayName} flags</span>
+              </div>
+              <div className="option-grid">
+                {visibleOptions.map((option) => (
+                  <CliOptionControl
+                    key={option.id}
+                    option={option}
+                    value={optionValues[option.id] ?? option.defaultValue}
+                    onChange={(value) => setCliOption(option, value)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           <section className="modal-section">
             <div className="section-head">
-              <h3>4. Identity</h3>
+              <h3>{visibleOptions.length > 0 ? "5. Identity" : "4. Identity"}</h3>
             </div>
             <div className="field-row">
               <label className="field">
@@ -439,13 +484,23 @@ export function AgentBuilderModal({
                     <small>Wrap in a pseudo terminal for CLIs that need one. macOS/Linux.</small>
                   </span>
                 </label>
-                <label className="switch">
-                  <input type="checkbox" checked={autoApprove} onChange={(event) => setAutoApprove(event.target.checked)} />
-                  <span>
-                    <strong>Auto-approve prompts</strong>
-                    <small>Answer trust prompts automatically where the CLI supports a flag.</small>
-                  </span>
-                </label>
+                {descriptor?.autoApproveArgs?.length && (
+                  <label className="switch">
+                    <input type="checkbox" checked={autoApprove} onChange={(event) => setAutoApprove(event.target.checked)} />
+                    <span>
+                      <strong>Auto-approve prompts</strong>
+                      <small>Uses {descriptor.autoApproveArgs.join(" ")} for this CLI.</small>
+                    </span>
+                  </label>
+                )}
+                {advancedOptions.map((option) => (
+                  <CliOptionControl
+                    key={option.id}
+                    option={option}
+                    value={optionValues[option.id] ?? option.defaultValue}
+                    onChange={(value) => setCliOption(option, value)}
+                  />
+                ))}
                 <label className="field">
                   Extra CLI args
                   <input
@@ -477,7 +532,7 @@ export function AgentBuilderModal({
         <footer className="agent-modal-foot">
           <span className="preview-command">
             <Terminal size={13} />
-            <code>{previewCommand(descriptor, model || customModel, extraArgs, commandOverride, interactive)}</code>
+            <code>{previewCommand(descriptor, model || customModel, extraArgs, commandOverride, interactive, autoApprove, systemPrompt, optionValues)}</code>
           </span>
           <div className="foot-actions">
             <button className="ghost-button" onClick={onClose}>
@@ -548,6 +603,94 @@ function ModuleOption({
   );
 }
 
+function CliOptionControl({
+  option,
+  value,
+  onChange,
+}: {
+  option: AgentCliOption;
+  value: AgentOptionValue | undefined;
+  onChange: (value: AgentOptionValue) => void;
+}) {
+  const hint = option.hint ? <small className="option-hint">{option.hint}</small> : null;
+
+  if (option.kind === "toggle") {
+    return (
+      <label className="switch cli-option-control">
+        <input type="checkbox" checked={value === true} onChange={(event) => onChange(event.target.checked)} />
+        <span>
+          <strong>{option.label}</strong>
+          {hint}
+        </span>
+      </label>
+    );
+  }
+
+  if (option.kind === "select") {
+    return (
+      <label className="field cli-option-control">
+        {option.label}
+        <select value={typeof value === "string" ? value : ""} onChange={(event) => onChange(event.target.value)}>
+          {(option.choices ?? []).map((choice) => (
+            <option key={choice.value || "__default"} value={choice.value}>
+              {choice.label}{choice.note ? ` · ${choice.note}` : ""}
+            </option>
+          ))}
+        </select>
+        {hint}
+      </label>
+    );
+  }
+
+  if (option.kind === "list") {
+    const text = Array.isArray(value) ? value.join("\n") : typeof value === "string" ? value : "";
+    return (
+      <label className="field cli-option-control">
+        {option.label}
+        <textarea
+          rows={3}
+          value={text}
+          onChange={(event) => onChange(event.target.value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean))}
+          placeholder={option.placeholder}
+        />
+        {hint}
+      </label>
+    );
+  }
+
+  return (
+    <label className="field cli-option-control">
+      {option.label}
+      <input
+        value={typeof value === "string" ? value : ""}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={option.placeholder}
+      />
+      {hint}
+    </label>
+  );
+}
+
+function sanitizeOptionValues(
+  descriptor: AgentCliDescriptor | undefined,
+  values: AgentOptionValues,
+): AgentOptionValues {
+  if (!descriptor?.options?.length) return {};
+  const allowed = new Map(descriptor.options.map((option) => [option.id, option]));
+  const next: AgentOptionValues = {};
+  for (const [key, value] of Object.entries(values)) {
+    const option = allowed.get(key);
+    if (!option) continue;
+    if (option.kind === "toggle" && typeof value === "boolean") next[key] = value;
+    else if ((option.kind === "select" || option.kind === "text") && typeof value === "string") next[key] = value;
+    else if (option.kind === "list") {
+      if (Array.isArray(value)) next[key] = value.filter((entry): entry is string => typeof entry === "string");
+      else if (typeof value === "string") next[key] = value;
+    }
+  }
+  return next;
+}
+
 function moduleIcon(moduleId: AgentModuleId) {
   switch (moduleId) {
     case "planner":
@@ -587,13 +730,28 @@ function previewCommand(
   extraArgs: string,
   commandOverride: string,
   interactive: boolean,
+  autoApprove: boolean,
+  systemPrompt: string,
+  optionValues: AgentOptionValues,
 ): string {
   if (!descriptor) return "select a CLI";
   const binary = commandOverride.trim() || descriptor.commandCandidates[0] || descriptor.id;
   const parts = [binary, ...(interactive ? descriptor.interactiveArgs : descriptor.baseArgs)];
-  if (model && descriptor.modelFlag) parts.push(descriptor.modelFlag, model);
+  const sentinelModels = new Set(["none", "default", "cli default"]);
+  if (model && descriptor.modelFlag && !sentinelModels.has(model.toLowerCase())) parts.push(descriptor.modelFlag, model);
   if (extraArgs.trim()) parts.push(extraArgs.trim());
+  if (autoApprove && descriptor.autoApproveArgs?.length) parts.push(...descriptor.autoApproveArgs);
+  if (systemPrompt.trim() && descriptor.systemPromptFlag) parts.push(descriptor.systemPromptFlag, quotePreview(systemPrompt.trim()));
+  try {
+    parts.push(...buildOptionArgs(descriptor, optionValues, { interactive }).map(quotePreview));
+  } catch {
+    parts.push("<invalid CLI option>");
+  }
   if (!interactive && descriptor.promptFlag) parts.push(descriptor.promptFlag, '"<task>"');
   else if (!interactive) parts.push('"<task>"');
   return parts.join(" ");
+}
+
+function quotePreview(value: string): string {
+  return /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
 }

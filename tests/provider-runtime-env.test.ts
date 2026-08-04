@@ -43,6 +43,29 @@ test("provider runtime picks explicit and native connected providers", () => {
   assert.equal(selectProviderConnection("shell", [custom], "custom-1")?.id, "custom-1");
 });
 
+test("an unverified connection is usable but an expired or disconnected one is not", () => {
+  const now = new Date().toISOString();
+  const base = {
+    id: "custom-1",
+    userId: "user-1",
+    provider: "custom-api" as const,
+    authMode: "api-key" as const,
+    storageMode: "local" as const,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Every connection starts "unverified", so treating it as unusable would mean a
+  // freshly saved key could not run until the user clicked Verify.
+  const unverified = { ...base, status: "unverified" as const };
+  assert.equal(selectProviderConnection("aider", [unverified], undefined)?.id, "custom-1");
+  assert.equal(selectProviderConnection("aider", [unverified], "custom-1")?.id, "custom-1");
+
+  // These two states mean a check actually concluded something was wrong.
+  assert.equal(selectProviderConnection("aider", [{ ...base, status: "disconnected" as const }], undefined), null);
+  assert.equal(selectProviderConnection("aider", [{ ...base, status: "expired" as const }], "custom-1"), null);
+});
+
 test("provider runtime env maps API-key connections to CLI environment variables", () => {
   const now = new Date().toISOString();
   const env = buildProviderRuntimeEnv({

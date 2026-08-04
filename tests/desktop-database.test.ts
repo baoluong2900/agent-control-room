@@ -3,6 +3,73 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DesktopDatabase } from "../src/main/database/desktop-database.ts";
+test("terminal logs return the latest entries in chronological order", async () => {
+  const db = await DesktopDatabase.open(path.join(os.tmpdir(), `agentic-log-tail-test-${Date.now()}`));
+  db.createAgentRun({
+    id: "run-log-tail",
+    cliId: "shell",
+    cwd: "/tmp/project-a",
+    prompt: "chatty command",
+    status: "queued",
+    startedAt: new Date().toISOString(),
+  });
+
+  for (let index = 1; index <= 450; index += 1) {
+    db.appendTerminalLog("run-log-tail", "stdout", `line-${index}`);
+  }
+
+  const logs = db.listTerminalLogs("run-log-tail");
+  assert.equal(logs.length, 400);
+  assert.equal(logs[0]?.message, "line-51");
+  assert.equal(logs.at(-1)?.message, "line-450");
+  db.close();
+});
+
+test("profile stats expose the latest run status", async () => {
+  const db = await DesktopDatabase.open(path.join(os.tmpdir(), `agentic-profile-stats-test-${Date.now()}`));
+  const profile = db.saveAgentProfile({ name: "Fixer", role: "fix", cliId: "shell", model: "local" });
+
+  db.createAgentRun({
+    id: "run-profile-failed",
+    cliId: "shell",
+    cwd: "/tmp/project-a",
+    prompt: "fail",
+    profileId: profile.id,
+    status: "queued",
+    startedAt: "2026-08-03T10:00:00.000Z",
+  });
+  db.updateAgentRunStatus("run-profile-failed", "failed", 1);
+
+  const reloaded = db.listAgentProfiles().find((entry) => entry.id === profile.id);
+  assert.equal(reloaded?.stats.lastStatus, "failed");
+  assert.equal(reloaded?.stats.failed, 1);
+  db.close();
+});
+
+test("opening the database marks interrupted agent runs as stopped", async () => {
+  const dir = path.join(os.tmpdir(), `agentic-interrupted-run-test-${Date.now()}`);
+  const db = await DesktopDatabase.open(dir);
+  const profile = db.saveAgentProfile({ name: "Runner", role: "run", cliId: "shell", model: "local" });
+  db.createAgentRun({
+    id: "run-interrupted",
+    cliId: "shell",
+    cwd: "/tmp/project-a",
+    prompt: "sleep 30",
+    profileId: profile.id,
+    status: "planning",
+    startedAt: "2026-08-03T10:00:00.000Z",
+  });
+  db.close();
+
+  const reopened = await DesktopDatabase.open(dir);
+  const run = reopened.listAgentRuns().find((entry) => entry.id === "run-interrupted");
+  assert.equal(run?.status, "stopped");
+  assert.ok(run?.endedAt);
+  const reloadedProfile = reopened.listAgentProfiles().find((entry) => entry.id === profile.id);
+  assert.equal(reloadedProfile?.stats.running, 0);
+  reopened.close();
+});
+
 
 test("task records persist and update status in local sqlite", async () => {
   const db = await DesktopDatabase.open(path.join(os.tmpdir(), `agentic-task-test-${Date.now()}`));

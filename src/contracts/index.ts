@@ -1,12 +1,17 @@
 export type {
   AgentCliDescriptor,
   AgentCliId,
+  AgentCliOption,
   AgentDefinition,
   AgentEvent,
   AgentEventType,
   AgentModelOption,
   AgentModelProbe,
   AgentModelSource,
+  AgentOptionChoice,
+  AgentOptionKind,
+  AgentOptionValue,
+  AgentOptionValues,
   AgentPingResult,
   AgentProcess,
   AgentModuleId,
@@ -47,6 +52,8 @@ export type {
   ProviderConnectionProvider,
   ProviderConnectionStatus,
   ProviderConnectionStorageMode,
+  ProviderConnectionVerifyResult,
+  ProviderVerificationOutcome,
 } from "./settings";
 export type { CliDiagnostic, SystemDiagnostics } from "./system";
 export type {
@@ -77,8 +84,11 @@ export type {
   WorkflowStatus,
   WorkflowStepDefinition,
   WorkflowStepKind,
+  WorkflowStepOutcome,
   WorkflowStepRunRecord,
   WorkflowTrigger,
   WorkflowTriggerType,
 } from "./workflow";
 export type { AgenticDesktopApi } from "./ipc";
+export { buildOptionArgs } from "./agent-options";
+export type { AgentOptionArgContext } from "./agent-options";

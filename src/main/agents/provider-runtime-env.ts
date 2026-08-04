@@ -15,12 +15,21 @@ export const providerByCli: Partial<Record<AgentCliId, ProviderConnection["provi
 
 const customApiCompatible = new Set<AgentCliId>(["aider", "opencode", "custom", "agy", "grok", "qwen"]);
 
+/**
+ * Statuses a connection can be spawned with. "unverified" is included on purpose:
+ * it means nobody has run a check yet, not that the credential is known bad, and
+ * every connection starts there. Excluding it would make a freshly saved key
+ * unusable until the user clicked Verify. Only "expired"/"disconnected" — states
+ * something actually concluded were broken — are withheld.
+ */
+const usableStatuses = new Set<ProviderConnection["status"]>(["connected", "unverified"]);
+
 export function selectProviderConnection(
   cliId: AgentCliId,
   connections: ProviderConnection[],
   requestedId?: string,
 ): ProviderConnection | null {
-  const connected = connections.filter((connection) => connection.status === "connected");
+  const connected = connections.filter((connection) => usableStatuses.has(connection.status));
   if (requestedId) {
     return connected.find((connection) => connection.id === requestedId) ?? null;
   }
@@ -44,6 +53,27 @@ export function buildProviderRuntimeEnv({ connection, secret }: ProviderRuntimeC
     AGENTIC_PROVIDER_AUTH_MODE: connection.authMode,
     AGENTIC_PROVIDER_ACCOUNT: connection.accountLabel ?? "",
   };
+
+  const baseUrl = connection.baseUrl?.trim();
+  if (baseUrl) {
+    env.AGENTIC_PROVIDER_BASE_URL = baseUrl;
+    // Both spellings are set because CLIs disagree on which they read, and an
+    // unused variable is harmless while a missing one silently reaches the
+    // provider's own endpoint instead of the user's router.
+    switch (connection.provider) {
+      case "claude-code":
+        env.ANTHROPIC_BASE_URL = baseUrl;
+        env.ANTHROPIC_API_URL = baseUrl;
+        break;
+      case "openai-codex":
+      case "custom-api":
+        env.OPENAI_BASE_URL = baseUrl;
+        env.OPENAI_API_BASE = baseUrl;
+        break;
+      default:
+        break;
+    }
+  }
 
   if (!secret) return env;
 

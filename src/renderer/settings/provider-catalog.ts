@@ -80,3 +80,15 @@ export const providerCatalog: ProviderCatalogEntry[] = [
 export function getProviderCatalogEntry(provider: ProviderConnectionProvider): ProviderCatalogEntry {
   return providerCatalog.find((entry) => entry.provider === provider) ?? providerCatalog[providerCatalog.length - 1];
 }
+
+/**
+ * Providers whose CLI reads a base-URL env var, so pointing them at a local
+ * router/proxy actually takes effect. The others authenticate through their own
+ * CLI login and ignore an endpoint override, so offering the field would imply
+ * a redirect the app cannot deliver.
+ */
+const baseUrlProviders = new Set<ProviderConnectionProvider>(["openai-codex", "claude-code", "custom-api"]);
+
+export function supportsBaseUrl(provider: ProviderConnectionProvider): boolean {
+  return baseUrlProviders.has(provider);
+}

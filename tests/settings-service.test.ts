@@ -151,7 +151,7 @@ test("saving a connection persists a vault reference and drops the plaintext tok
 
   assert.ok(connection.tokenReference, "connection points at the vault");
   assert.equal(connection.authMode, "api-key");
-  assert.equal(connection.status, "connected");
+  assert.equal(connection.status, "unverified", "a save is not a check");
   assert.equal((connection as { tokenSecret?: string }).tokenSecret, undefined);
   assert.deepEqual(storage.encryptCalls, ["sk-custom-123"]);
   assert.deepEqual(Object.keys(readVaultFile(dir)), [connection.tokenReference]);
@@ -185,6 +185,31 @@ test("rotating a connection token keeps one reference and one vault entry", asyn
     "enc:token-v2",
   );
 
+  db.close();
+});
+
+test("rotating a saved connection token reuses the stored reference when the UI omits it", async () => {
+  const dir = tempDir("settings-rotate-existing");
+  const db = await DesktopDatabase.open(dir);
+  const service = new SettingsService(db, new ProviderSecretVault(dir, createStorage()), createLinkOpener());
+
+  const created = service.saveProviderConnection({ provider: "custom-api", tokenSecret: "token-v1" });
+  const rotated = service.saveProviderConnection({
+    id: created.id,
+    provider: "custom-api",
+    tokenSecret: "token-v2",
+  });
+
+  assert.equal(rotated.tokenReference, created.tokenReference);
+  const entries = readVaultFile(dir);
+  assert.equal(Object.keys(entries).length, 1);
+  assert.equal(
+    Buffer.from(entries[created.tokenReference!].encryptedValue, "base64").toString("utf8"),
+    "enc:token-v2",
+  );
+
+  service.deleteProviderConnection(rotated.id);
+  assert.deepEqual(readVaultFile(dir), {});
   db.close();
 });
 
@@ -223,6 +248,125 @@ test("deleting a connection also removes its secret from the vault", async () =>
     [kept.id],
   );
   assert.deepEqual(Object.keys(readVaultFile(dir)), [kept.tokenReference]);
+
+  db.close();
+});
+
+/** Records which CLIs were probed, so tests can assert the provider→CLI mapping. */
+function createCliProbe(installed: boolean, detail?: string) {
+  const probed: string[] = [];
+  const probe = async (cliId: string) => {
+    probed.push(cliId);
+    return { installed, detail };
+  };
+  return { probed, probe: probe as never };
+}
+
+test("verifying an oauth connection passes on CLI presence alone and records the check", async () => {
+  const dir = tempDir("settings-verify-ok");
+  const db = await DesktopDatabase.open(dir);
+  const cli = createCliProbe(true, "claude 1.2.3");
+  const service = new SettingsService(db, new ProviderSecretVault(dir, createStorage()), createLinkOpener(), cli.probe);
+
+  const created = service.saveProviderConnection({ provider: "claude-code" });
+  assert.equal(created.status, "unverified");
+
+  const result = await service.verifyProviderConnection(created.id);
+
+  assert.equal(result.outcome, "verified");
+  assert.equal(result.status, "connected");
+  assert.deepEqual(cli.probed, ["claude"], "claude-code maps to the claude CLI");
+  assert.ok(Date.parse(result.checkedAt) > 0);
+  // oauth logins live in the CLI, so no local credential is required.
+  assert.match(result.detail, /supplies its own oauth login/);
+
+  const [persisted] = service.listProviderConnections();
+  assert.equal(persisted.status, "connected");
+  assert.equal(persisted.lastVerifiedAt, result.checkedAt, "the check is durable, not just returned");
+  assert.equal(persisted.verificationDetail, result.detail);
+
+  db.close();
+});
+
+test("verifying reports a missing CLI as disconnected without claiming the token is bad", async () => {
+  const dir = tempDir("settings-verify-no-cli");
+  const db = await DesktopDatabase.open(dir);
+  const cli = createCliProbe(false, "tried codex");
+  const service = new SettingsService(db, new ProviderSecretVault(dir, createStorage()), createLinkOpener(), cli.probe);
+
+  const created = service.saveProviderConnection({ provider: "openai-codex" });
+  const result = await service.verifyProviderConnection(created.id);
+
+  assert.equal(result.outcome, "cli-missing");
+  assert.equal(result.status, "disconnected");
+  assert.match(result.detail, /not found on PATH: tried codex/);
+  assert.equal(service.listProviderConnections()[0].status, "disconnected");
+
+  db.close();
+});
+
+test("verifying an api-key connection with no stored key reports missing-credential", async () => {
+  const dir = tempDir("settings-verify-no-key");
+  const db = await DesktopDatabase.open(dir);
+  const cli = createCliProbe(true);
+  const service = new SettingsService(db, new ProviderSecretVault(dir, createStorage()), createLinkOpener(), cli.probe);
+
+  const created = service.saveProviderConnection({ provider: "custom-api" });
+  const result = await service.verifyProviderConnection(created.id);
+
+  assert.equal(result.outcome, "missing-credential");
+  assert.equal(result.status, "disconnected");
+  assert.deepEqual(cli.probed, [], "a keyless api-key connection fails before any probe runs");
+
+  db.close();
+});
+
+test("verifying a custom-api connection checks the stored key without calling the provider", async () => {
+  const dir = tempDir("settings-verify-custom");
+  const db = await DesktopDatabase.open(dir);
+  const cli = createCliProbe(true);
+  const service = new SettingsService(db, new ProviderSecretVault(dir, createStorage()), createLinkOpener(), cli.probe);
+
+  const created = service.saveProviderConnection({ provider: "custom-api", tokenSecret: "sk-gateway" });
+  const result = await service.verifyProviderConnection(created.id);
+
+  assert.equal(result.outcome, "verified");
+  assert.equal(result.status, "connected");
+  assert.deepEqual(cli.probed, [], "custom-api has no first-party CLI to probe");
+  assert.match(result.detail, /key was not called/);
+
+  db.close();
+});
+
+test("rotating a credential invalidates the previous verification", async () => {
+  const dir = tempDir("settings-verify-rotate");
+  const db = await DesktopDatabase.open(dir);
+  const cli = createCliProbe(true);
+  const service = new SettingsService(db, new ProviderSecretVault(dir, createStorage()), createLinkOpener(), cli.probe);
+
+  const created = service.saveProviderConnection({ provider: "custom-api", tokenSecret: "sk-first" });
+  const verified = await service.verifyProviderConnection(created.id);
+  assert.equal(verified.status, "connected");
+
+  const rotated = service.saveProviderConnection({
+    id: created.id,
+    provider: "custom-api",
+    tokenSecret: "sk-second",
+  });
+
+  assert.equal(rotated.status, "unverified", "a new key has not been checked");
+  assert.equal(rotated.lastVerifiedAt, undefined, "the stale timestamp must be cleared, not carried over");
+  assert.match(rotated.verificationDetail ?? "", /Verify this connection again/);
+
+  db.close();
+});
+
+test("verifying an unknown connection id fails loudly", async () => {
+  const dir = tempDir("settings-verify-missing");
+  const db = await DesktopDatabase.open(dir);
+  const service = new SettingsService(db, new ProviderSecretVault(dir, createStorage()), createLinkOpener());
+
+  await assert.rejects(() => service.verifyProviderConnection("nope"), /Provider connection nope was not found/);
 
   db.close();
 });

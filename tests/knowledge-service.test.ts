@@ -5,6 +5,32 @@ import path from "node:path";
 import test from "node:test";
 import { DesktopDatabase } from "../src/main/database/desktop-database.ts";
 import { KnowledgeService } from "../src/main/knowledge/knowledge-service.ts";
+test("knowledge graph caps never leave dangling edges and XML export strips invalid control chars", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentic-knowledge-large-project-"));
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "agentic-knowledge-large-db-"));
+
+  for (let fileIndex = 0; fileIndex < 300; fileIndex += 1) {
+    const imports = Array.from({ length: 10 }, (_, importIndex) => `import { z } from "pkg-${fileIndex}-${importIndex}";`);
+    const exports = Array.from({ length: 12 }, (_, exportIndex) => `export function fn_${fileIndex}_${exportIndex}() {}`);
+    fs.writeFileSync(path.join(root, `mod${fileIndex}.ts`), [...imports, ...exports].join("\n"), "utf8");
+  }
+  fs.writeFileSync(path.join(root, "ansi.ts"), `export const banner = "${String.fromCharCode(0x1b)}[31mred${String.fromCharCode(0x07)}";\n`, "utf8");
+
+  const db = await DesktopDatabase.open(userData);
+  const service = new KnowledgeService(db);
+  const snapshot = await service.scan({ projectPath: root });
+  const nodeIds = new Set(snapshot.graph.nodes.map((node) => node.id));
+
+  assert.equal(
+    snapshot.graph.edges.some((edge) => !nodeIds.has(edge.source) || !nodeIds.has(edge.target)),
+    false,
+  );
+
+  const xml = await service.export(root, "xml");
+  assert.equal(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(xml.content), false);
+  db.close();
+});
+
 
 test("knowledge service scans a project into a persistent codegraph and exports agent context", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentic-knowledge-project-"));

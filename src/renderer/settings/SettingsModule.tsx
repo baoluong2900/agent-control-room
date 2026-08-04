@@ -26,7 +26,7 @@ import type {
   ProviderConnectionStatus,
 } from "@contracts";
 import { useEffect, useMemo, useState } from "react";
-import { getProviderCatalogEntry, providerCatalog } from "./provider-catalog";
+import { getProviderCatalogEntry, providerCatalog, supportsBaseUrl } from "./provider-catalog";
 import "./settings.css";
 
 type BannerTone = "success" | "error" | "idle";
@@ -70,6 +70,7 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
     "custom-api": "Custom API key",
   });
   const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const [baseUrlDrafts, setBaseUrlDrafts] = useState<Partial<Record<ProviderConnectionProvider, string>>>({});
   const [loading, setLoading] = useState(true);
   const [savingIdentity, setSavingIdentity] = useState(false);
   const [busyProvider, setBusyProvider] = useState<ProviderConnectionProvider | null>(null);
@@ -173,6 +174,7 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
         accountLabel,
         status: "connected",
         tokenSecret: provider === "custom-api" ? apiKeyDraft.trim() : undefined,
+        baseUrl: supportsBaseUrl(provider) ? baseUrlDrafts[provider]?.trim() ?? "" : undefined,
         quotaLabel: provider === "custom-api" ? "API key" : undefined,
       });
 
@@ -210,6 +212,7 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
         authMode: connection.authMode,
         accountLabel: connection.accountLabel,
         status: "connected",
+        baseUrl: connection.baseUrl,
         quotaLabel: connection.quotaLabel,
       });
 
@@ -231,6 +234,7 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
         provider: connection.provider,
         authMode: connection.authMode,
         accountLabel: connection.accountLabel,
+        baseUrl: connection.baseUrl,
         quotaLabel: connection.quotaLabel,
         status: "disconnected",
       });
@@ -470,6 +474,18 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
                           onChange={(event) => setApiKeyDraft(event.target.value)}
                           placeholder="sk-..."
                           type="password"
+                        />
+                      </label>
+                    )}
+                    {supportsBaseUrl(entry.provider) && (
+                      <label className="settings-field compact">
+                        Base URL <span className="settings-field-hint">optional proxy / router</span>
+                        <input
+                          value={baseUrlDrafts[entry.provider] ?? ""}
+                          onChange={(event) =>
+                            setBaseUrlDrafts((current) => ({ ...current, [entry.provider]: event.target.value }))
+                          }
+                          placeholder="http://127.0.0.1:20128/v1"
                         />
                       </label>
                     )}

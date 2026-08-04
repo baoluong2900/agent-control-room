@@ -164,8 +164,6 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
   },
 
   async loadModels(cliId) {
-    const cached = get().models[cliId];
-    if (cached) return cached;
     try {
       const probe = await window.agentic.agents.models(cliId);
       set((state) => ({ models: { ...state.models, [cliId]: probe } }));
@@ -217,6 +215,9 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
         commandOverride: profile.commandOverride,
         promptMode: profile.promptMode,
         forceTty: profile.forceTty,
+        autoApprove: profile.autoApprove,
+        systemPrompt: profile.systemPrompt,
+        options: profile.options,
         shellCommand: profile.cliId === "shell" ? options.prompt : undefined,
       });
 

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
+import { buildOptionArgs } from "@contracts";
 import type { AgentCliId, AgentPromptMode, AgentRunInput } from "@contracts";
 import { getAgentDescriptor, listAgentCatalog } from "./catalog";
 
@@ -132,6 +133,17 @@ export async function buildInvocation(input: AgentRunInput): Promise<Invocation>
   if (input.extraArgs?.trim()) {
     args.push(...parseArgs(input.extraArgs.trim()));
   }
+
+  if (input.autoApprove && descriptor.autoApproveArgs?.length) {
+    args.push(...descriptor.autoApproveArgs);
+  }
+
+  const systemPrompt = input.systemPrompt?.trim();
+  if (systemPrompt && descriptor.systemPromptFlag) {
+    args.push(descriptor.systemPromptFlag, systemPrompt);
+  }
+
+  args.push(...buildOptionArgs(descriptor, input.options, { interactive: Boolean(input.interactive) }));
 
   if (structuredChat && input.resumeConversationId?.trim()) {
     args.push(...structuredChatResumeArgs(input.cliId, input.resumeConversationId.trim()));

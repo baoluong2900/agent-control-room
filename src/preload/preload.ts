@@ -36,6 +36,7 @@ const api: AgenticDesktopApi = {
     saveProviderConnection: (input: ProviderConnectionInput) =>
       ipcRenderer.invoke("settings:save-provider-connection", input),
     deleteProviderConnection: (id: string) => ipcRenderer.invoke("settings:delete-provider-connection", id),
+    verifyProviderConnection: (id: string) => ipcRenderer.invoke("settings:verify-provider-connection", id),
     openProviderAuth: (input: ProviderConnectionAuthRequest) => ipcRenderer.invoke("settings:open-provider-auth", input),
   },
   agents: {

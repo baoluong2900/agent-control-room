@@ -55,7 +55,7 @@ app.whenReady().then(async () => {
   const projectService = new ProjectService(database);
   const settingsService = new SettingsService(database, providerSecretVault, shell);
   const knowledgeService = new KnowledgeService(database);
-  const workflowService = new WorkflowService(database, activeWebContents);
+  const workflowService = new WorkflowService(database, activeWebContents, providerSecretVault);
   taskAutomationService = new TaskAutomationService(database, agentProcessManager, activeWebContents);
   workflowSchedulerService = new WorkflowSchedulerService(workflowService, activeWebContents);
 

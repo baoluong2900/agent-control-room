@@ -68,6 +68,58 @@ export interface AgentModelOption {
   recommended?: boolean;
 }
 
+/** Control the renderer draws for a declared CLI option. */
+export type AgentOptionKind =
+  /** One value out of `choices`, emitted as `--flag value`. */
+  | "select"
+  /** On/off. Emits `--flag` alone when `valueless`, otherwise `--flag true`. */
+  | "toggle"
+  /** Free text, emitted as `--flag value` when non-empty. */
+  | "text"
+  /** Newline/comma separated entries, emitted once per entry when `repeatable`. */
+  | "list";
+
+export interface AgentOptionChoice {
+  value: string;
+  label: string;
+  note?: string;
+}
+
+/**
+ * One configurable flag of a CLI, declared by the catalog and rendered as a real
+ * control in the agent builder instead of forcing the user to hand-type it into
+ * "Extra CLI args".
+ */
+export interface AgentCliOption {
+  /** Stable key the profile and run input store the value under. */
+  id: string;
+  label: string;
+  kind: AgentOptionKind;
+  /** Flag emitted before the value, e.g. `--effort`. */
+  flag: string;
+  hint?: string;
+  /** `select`: the allowed values, in display order. */
+  choices?: AgentOptionChoice[];
+  placeholder?: string;
+  /** Applied when the profile has not chosen a value. */
+  defaultValue?: AgentOptionValue;
+  /** `toggle`: emit the flag on its own, with no value argument. */
+  valueless?: boolean;
+  /** `list`: repeat the flag per entry (`--add-dir a --add-dir b`). */
+  repeatable?: boolean;
+  /** Emit `--flag=value` rather than `--flag value`. */
+  joinWithEquals?: boolean;
+  /** Only emitted for one kind of run; defaults to both. */
+  appliesTo?: "both" | "interactive" | "oneshot";
+  /** Kept behind the advanced disclosure in the builder. */
+  advanced?: boolean;
+}
+
+export type AgentOptionValue = string | boolean | string[];
+
+/** Values chosen for a descriptor's `options`, keyed by `AgentCliOption.id`. */
+export type AgentOptionValues = Record<string, AgentOptionValue>;
+
 export type AgentModelSource = "catalog" | "cli" | "custom";
 
 export interface AgentModelProbe {
@@ -99,6 +151,16 @@ export interface AgentCliDescriptor {
   promptMode: AgentPromptMode;
   supportsInteractive: boolean;
   supportsStdin: boolean;
+  /**
+   * Flag that skips tool-permission prompts, emitted when the profile has
+   * `autoApprove`. CLIs without one leave this undefined and the toggle is
+   * hidden rather than silently ignored.
+   */
+  autoApproveArgs?: string[];
+  /** Flag that carries a system prompt, e.g. `--append-system-prompt`. */
+  systemPromptFlag?: string;
+  /** Declarative flag surface rendered as real controls in the builder. */
+  options?: AgentCliOption[];
   /** Optional args that make the CLI print its own model list. */
   modelListArgs?: string[];
   models: AgentModelOption[];
@@ -143,6 +205,8 @@ export interface AgentProfileInput {
   interactive?: boolean;
   forceTty?: boolean;
   autoApprove?: boolean;
+  /** Values for the CLI descriptor's declared `options`. */
+  options?: AgentOptionValues;
   enabled?: boolean;
   tags?: string[];
 }
@@ -164,6 +228,8 @@ export interface AgentProfile {
   interactive: boolean;
   forceTty: boolean;
   autoApprove: boolean;
+  /** Values for the CLI descriptor's declared `options`. */
+  options: AgentOptionValues;
   enabled: boolean;
   tags: string[];
   createdAt: string;
@@ -194,6 +260,12 @@ export interface AgentRunInput {
   promptMode?: AgentPromptMode;
   /** Wrap the process in a pseudo terminal when the platform supports it. */
   forceTty?: boolean;
+  /** Skip the CLI's tool-permission prompts via its `autoApproveArgs`. */
+  autoApprove?: boolean;
+  /** Extra instructions passed through the CLI's `systemPromptFlag`. */
+  systemPrompt?: string;
+  /** Values for the CLI descriptor's declared `options`. */
+  options?: AgentOptionValues;
 }
 
 export interface AgentRunRecord {

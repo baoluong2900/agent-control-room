@@ -43,6 +43,8 @@ type StepRow = {
   kind: string | null;
   summary: string | null;
   agent_cli_id: string;
+  profile_id: string | null;
+  provider_connection_id: string | null;
   model: string | null;
   prompt_template: string;
   shell_command: string | null;
@@ -128,6 +130,12 @@ export class WorkflowRepository {
         output text
       );
 
+      create table if not exists workflow_metadata (
+        key text primary key,
+        value text not null,
+        updated_at text not null default current_timestamp
+      );
+
       create index if not exists idx_workflow_steps_workflow on workflow_steps (workflow_id, step_order);
       create index if not exists idx_workflow_runs_workflow on workflow_runs (workflow_id, started_at desc);
       create index if not exists idx_workflow_step_runs_run on workflow_step_runs (workflow_run_id, step_order);
@@ -155,6 +163,8 @@ export class WorkflowRepository {
       { name: "kind", ddl: "text not null default 'execute'" },
       { name: "summary", ddl: "text not null default ''" },
       { name: "model", ddl: "text not null default ''" },
+      { name: "profile_id", ddl: "text" },
+      { name: "provider_connection_id", ddl: "text" },
       { name: "shell_command", ddl: "text" },
       { name: "timeout_seconds", ddl: "integer not null default 600" },
       { name: "requires_approval", ddl: "integer not null default 0" },
@@ -166,8 +176,18 @@ export class WorkflowRepository {
   }
 
   private seed(): void {
-    const row = this.db.prepare("select count(*) as total from workflows").get() as { total: number };
-    if (row.total > 0) return;
+    const seeded = this.db.prepare("select value from workflow_metadata where key = 'seeds_initialized'").get() as
+      | { value: string }
+      | undefined;
+    if (seeded) return;
+
+    const existing = this.db.prepare("select count(*) as total from workflows").get() as { total: number };
+    if (existing.total > 0) {
+      this.db
+        .prepare("insert into workflow_metadata (key, value, updated_at) values ('seeds_initialized', 'true', ?)")
+        .run(new Date().toISOString());
+      return;
+    }
 
     for (const seed of workflowSeeds) {
       this.db
@@ -203,15 +223,20 @@ export class WorkflowRepository {
         this.insertStep(seed.id, { ...step, order: index + 1 });
       });
     }
+
+    this.db
+      .prepare("insert into workflow_metadata (key, value, updated_at) values ('seeds_initialized', 'true', ?)")
+      .run(new Date().toISOString());
   }
 
   private insertStep(workflowId: string, step: WorkflowStepDefinition): void {
     this.db
       .prepare(
         `insert into workflow_steps (
-           id, workflow_id, step_order, name, kind, summary, agent_cli_id, model,
-           prompt_template, shell_command, timeout_seconds, requires_approval, continue_on_error, enabled
-         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           id, workflow_id, step_order, name, kind, summary, agent_cli_id, profile_id,
+           provider_connection_id, model, prompt_template, shell_command, timeout_seconds,
+           requires_approval, continue_on_error, enabled
+         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         step.id,
@@ -221,6 +246,8 @@ export class WorkflowRepository {
         step.kind,
         step.summary,
         step.cliId,
+        step.profileId ?? null,
+        step.providerConnectionId ?? null,
         step.model,
         step.instruction,
         step.shellCommand ?? null,
@@ -516,6 +543,8 @@ export class WorkflowRepository {
       kind: (step.kind ?? "execute") as WorkflowStepKind,
       summary: step.summary ?? "",
       cliId: step.agent_cli_id as AgentCliId,
+      profileId: step.profile_id ?? undefined,
+      providerConnectionId: step.provider_connection_id ?? undefined,
       model: step.model ?? "",
       instruction: step.prompt_template,
       shellCommand: step.shell_command ?? undefined,

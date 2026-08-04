@@ -1490,6 +1490,39 @@
   gap: 12px;
   padding-top: 4px;
 }
+.option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.cli-config-section {
+  border-color: rgba(56, 189, 248, 0.18);
+}
+.cli-option-control {
+  min-height: 100%;
+}
+.field .option-hint,
+.option-hint {
+  display: block;
+  margin-top: 5px;
+  color: #afa8c7;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.field select {
+  width: 100%;
+  border: 1px solid rgba(247, 243, 255, 0.12);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: rgba(7, 8, 21, 0.62);
+  color: var(--a-text);
+  outline: none;
+}
+.field select:focus,
+.field input:focus,
+.field textarea:focus {
+  border-color: rgba(167, 139, 250, 0.55);
+}
 .switch {
   display: flex;
   align-items: flex-start;
@@ -2405,6 +2438,7 @@
 .hint-line,
 .field span,
 .switch small,
+.option-hint,
 .agent-popover p,
 .agent-user-copy small,
 .agent-fleet-copy small,

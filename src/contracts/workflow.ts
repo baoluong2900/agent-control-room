@@ -45,6 +45,15 @@ export interface WorkflowStepDefinition {
   summary: string;
   /** Which local CLI agent runs this step. */
   cliId: AgentCliId;
+  /**
+   * Agent profile this step runs as. When set, the profile supplies the provider
+   * connection, system prompt, options and CLI overrides, so a step behaves like
+   * the same agent the user configured in the builder. `cliId`/`model` stay as
+   * the fallback for steps that predate profiles or deliberately run bare.
+   */
+  profileId?: string;
+  /** Provider connection override for this step, taking precedence over the profile's. */
+  providerConnectionId?: string;
   /** Model label handed to the CLI (free text so any local model works). */
   model: string;
   /** The prompt template describing exactly what the agent must do. */
@@ -193,3 +202,13 @@ export interface WorkflowExportResult {
   filePath: string;
   workflowId: string;
 }
+
+/** One finished step's output, used to build the next step's context. */
+export interface WorkflowStepOutcome {
+  stepId: string;
+  name: string;
+  kind: WorkflowStepKind;
+  status: WorkflowRunStatus;
+  output: string;
+}
+

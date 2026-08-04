@@ -11,7 +11,7 @@ import type {
   AgentStatus,
 } from "@contracts";
 import { buildInvocation, cliDisplayNames, quoteCommand, usesStructuredChat } from "../agents/commands";
-import { buildProviderRuntimeEnv, selectProviderConnection } from "../agents/provider-runtime-env";
+import { resolveProviderEnv } from "../agents/provider-resolver";
 import type { ProviderSecretVault } from "../settings/provider-secret-vault";
 import type { DesktopDatabase } from "../database/desktop-database";
 
@@ -104,7 +104,7 @@ export class AgentProcessManager {
     let providerEnv: NodeJS.ProcessEnv;
     try {
       invocation = await buildInvocation(input);
-      providerEnv = this.resolveProviderEnv(input);
+      providerEnv = resolveProviderEnv(this.db, this.secretVault, input);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.db.updateAgentRunStatus(runId, "failed", null);
@@ -303,22 +303,6 @@ export class AgentProcessManager {
       startedAt: running.startedAt,
       command: quoteCommand([running.command, ...running.args]),
     }));
-  }
-
-  private resolveProviderEnv(input: AgentRunInput): NodeJS.ProcessEnv {
-    const profile = input.profileId ? this.db.listAgentProfiles().find((entry) => entry.id === input.profileId) : undefined;
-    const requestedConnectionId = input.providerConnectionId ?? profile?.providerConnectionId;
-    const connection = selectProviderConnection(input.cliId, this.db.listProviderConnections(), requestedConnectionId);
-
-    if (!connection) {
-      if (requestedConnectionId) {
-        throw new Error("Provider connection is missing or not connected.");
-      }
-      return {};
-    }
-
-    const secret = connection.tokenReference ? this.secretVault?.read(connection.tokenReference) : undefined;
-    return buildProviderRuntimeEnv({ connection, secret });
   }
 
   private handleOutput(runId: string, type: "run:stdout" | "run:stderr", message: string): void {

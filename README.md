@@ -36,6 +36,8 @@ src/
 forge.config.ts Electron Forge packaging config
 ```
 
+For review/navigation, start with [docs/source-map.md](docs/source-map.md). It maps each feature to its renderer entry, backend service, shared contract, and tests, and marks generated folders that should not be reviewed as source.
+
 ## Phase 1 implemented
 
 - Select a project folder through the native desktop dialog.

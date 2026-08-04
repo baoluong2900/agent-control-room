@@ -25,6 +25,7 @@ import type {
   TaskSaveInput,
   TaskStatus,
 } from "@contracts";
+import { appMigrations, runMigrations, schemaVersion, type AppliedMigration } from "./migrations";
 import { ensureColumns } from "./sqlite-types";
 import type { SqliteDatabase } from "./sqlite-types";
 import { WorkflowRepository } from "./workflow-repository";
@@ -72,10 +73,13 @@ type ProviderConnectionRow = {
   accountLabel: string | null;
   status: string;
   tokenReference: string | null;
+  baseUrl: string | null;
   quotaLabel: string | null;
   createdAt: string;
   updatedAt: string;
   lastConnectedAt: string | null;
+  lastVerifiedAt: string | null;
+  verificationDetail: string | null;
 };
 
 type StatsRow = {
@@ -147,6 +151,24 @@ const defaultIdentity: AppIdentityInput = {
   status: "signed-out",
 };
 
+const providerConnectionColumns = `
+  id,
+  user_id as userId,
+  provider,
+  auth_mode as authMode,
+  storage_mode as storageMode,
+  account_label as accountLabel,
+  status,
+  token_reference as tokenReference,
+  base_url as baseUrl,
+  quota_label as quotaLabel,
+  created_at as createdAt,
+  updated_at as updatedAt,
+  last_connected_at as lastConnectedAt,
+  last_verified_at as lastVerifiedAt,
+  verification_detail as verificationDetail
+`;
+
 const taskSelectColumns = `
   id,
   project_id,
@@ -169,6 +191,7 @@ const taskSelectColumns = `
 
 export class DesktopDatabase {
   readonly workflows: WorkflowRepository;
+  private appliedMigrations: AppliedMigration[] = [];
 
   private constructor(private readonly db: SqliteDatabase) {
     this.workflows = new WorkflowRepository(db);
@@ -181,6 +204,7 @@ export class DesktopDatabase {
     const db = new sqlite.DatabaseSync(sqlitePath) as SqliteDatabase;
     const database = new DesktopDatabase(db);
     database.migrate();
+    database.reconcileInterruptedAgentRuns();
     database.ensureDefaultIdentity();
     return database;
   }
@@ -254,37 +278,13 @@ export class DesktopDatabase {
     const rows = this.db
       .prepare(
         `select
-           id,
-           user_id as userId,
-           provider,
-           auth_mode as authMode,
-           storage_mode as storageMode,
-           account_label as accountLabel,
-           status,
-           token_reference as tokenReference,
-           quota_label as quotaLabel,
-           created_at as createdAt,
-           updated_at as updatedAt,
-           last_connected_at as lastConnectedAt
+           ${providerConnectionColumns}
          from provider_connections
          order by updated_at desc, created_at desc`,
       )
       .all() as ProviderConnectionRow[];
 
-    return rows.map((row) => ({
-      id: row.id,
-      userId: row.userId,
-      provider: row.provider as ProviderConnection["provider"],
-      authMode: row.authMode as ProviderConnection["authMode"],
-      storageMode: row.storageMode as ProviderConnection["storageMode"],
-      accountLabel: row.accountLabel ?? undefined,
-      status: row.status as ProviderConnection["status"],
-      tokenReference: row.tokenReference ?? undefined,
-      quotaLabel: row.quotaLabel ?? undefined,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-      lastConnectedAt: row.lastConnectedAt ?? undefined,
-    }));
+    return rows.map(hydrateProviderConnection);
   }
 
   saveProviderConnection(input: ProviderConnectionInput): ProviderConnection {
@@ -293,7 +293,9 @@ export class DesktopDatabase {
     const identity = this.getAppIdentity();
     const existing = this.findProviderConnectionRow(id);
     const userId = input.userId?.trim() || existing?.userId || identity.id;
-    const status = input.status ?? existing?.status ?? "connected";
+    // A brand new connection has not been checked against anything yet, so it
+    // starts "unverified" rather than claiming to be connected.
+    const status = input.status ?? existing?.status ?? "unverified";
     const authMode = input.authMode ?? existing?.authMode ?? (input.provider === "custom-api" ? "api-key" : "oauth");
     const storageMode = existing?.storageMode ?? "local";
 
@@ -301,8 +303,8 @@ export class DesktopDatabase {
       .prepare(
         `insert into provider_connections
            (id, user_id, provider, auth_mode, storage_mode, account_label, status, token_reference,
-            quota_label, created_at, updated_at, last_connected_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            base_url, quota_label, created_at, updated_at, last_connected_at, last_verified_at, verification_detail)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(id) do update set
            user_id = excluded.user_id,
            provider = excluded.provider,
@@ -311,9 +313,12 @@ export class DesktopDatabase {
            account_label = excluded.account_label,
            status = excluded.status,
            token_reference = coalesce(excluded.token_reference, provider_connections.token_reference),
+           base_url = excluded.base_url,
            quota_label = excluded.quota_label,
            updated_at = excluded.updated_at,
-           last_connected_at = excluded.last_connected_at`,
+           last_connected_at = excluded.last_connected_at,
+           last_verified_at = excluded.last_verified_at,
+           verification_detail = excluded.verification_detail`,
       )
       .run(
         id,
@@ -324,10 +329,15 @@ export class DesktopDatabase {
         input.accountLabel?.trim() || existing?.accountLabel || null,
         status,
         input.tokenReference?.trim() || existing?.tokenReference || null,
+        // An empty string is a deliberate "stop using a proxy", so it clears the
+        // stored value instead of falling back to the previous endpoint.
+        input.baseUrl === undefined ? existing?.baseUrl ?? null : input.baseUrl.trim() || null,
         input.quotaLabel?.trim() || existing?.quotaLabel || null,
         existing?.createdAt ?? now,
         now,
         status === "connected" ? now : existing?.lastConnectedAt ?? null,
+        resolveNullable(input.lastVerifiedAt, existing?.lastVerifiedAt),
+        resolveNullable(input.verificationDetail, existing?.verificationDetail),
       );
 
     const saved = this.findProviderConnection(id);
@@ -499,11 +509,15 @@ export class DesktopDatabase {
   listTerminalLogs(runId: string, limit = 400): TerminalLogRow[] {
     return this.db
       .prepare(
-        `select stream, message, created_at as createdAt
-         from terminal_logs
-         where run_id = ?
-         order by id asc
-         limit ?`,
+        `select stream, message, createdAt
+         from (
+           select stream, message, created_at as createdAt, id
+           from terminal_logs
+           where run_id = ?
+           order by id desc
+           limit ?
+         )
+         order by id asc`,
       )
       .all(runId, limit) as TerminalLogRow[];
   }
@@ -803,6 +817,19 @@ export class DesktopDatabase {
     this.db.close();
   }
 
+  private reconcileInterruptedAgentRuns(): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `update agent_runs
+         set status = 'stopped',
+             ended_at = coalesce(ended_at, ?)
+         where ended_at is null
+           and status not in ('completed', 'failed', 'stopped')`,
+      )
+      .run(now);
+  }
+
   private ensureDefaultIdentity(): void {
     if (this.findIdentityRow()) return;
     const now = new Date().toISOString();
@@ -851,18 +878,7 @@ export class DesktopDatabase {
     const row = this.db
       .prepare(
         `select
-           id,
-           user_id as userId,
-           provider,
-           auth_mode as authMode,
-           storage_mode as storageMode,
-           account_label as accountLabel,
-           status,
-           token_reference as tokenReference,
-           quota_label as quotaLabel,
-           created_at as createdAt,
-           updated_at as updatedAt,
-           last_connected_at as lastConnectedAt
+           ${providerConnectionColumns}
          from provider_connections
          where id = ?`,
       )
@@ -896,7 +912,13 @@ export class DesktopDatabase {
                else 0 end
            ) as totalMs,
            max(started_at) as lastRunAt,
-           null as lastStatus
+           (
+             select latest.status
+             from agent_runs latest
+             where latest.profile_id = agent_runs.profile_id
+             order by latest.started_at desc, latest.id desc
+             limit 1
+           ) as lastStatus
          from agent_runs
          where profile_id is not null
          group by profile_id`,
@@ -950,10 +972,13 @@ export class DesktopDatabase {
         account_label text,
         status text not null,
         token_reference text,
+        base_url text,
         quota_label text,
         created_at text not null,
         updated_at text not null,
-        last_connected_at text
+        last_connected_at text,
+        last_verified_at text,
+        verification_detail text
       );
 
       create table if not exists agent_profiles (
@@ -1090,6 +1115,19 @@ export class DesktopDatabase {
       create index if not exists idx_knowledge_snapshots_generated on knowledge_snapshots (generated_at desc);
     `);
     this.workflows.migrate();
+
+    // Versioned steps run last, so they can assume every legacy table exists.
+    this.appliedMigrations = runMigrations(this.db, appMigrations);
+  }
+
+  /** Highest recorded schema version; 0 for a database that predates versioning. */
+  schemaVersion(): number {
+    return schemaVersion(this.db);
+  }
+
+  /** Migrations that ran during this open, for startup logging and tests. */
+  migrationsAppliedOnOpen(): AppliedMigration[] {
+    return this.appliedMigrations;
   }
 
   /** Adds a column when an older database file predates it. */
@@ -1134,6 +1172,18 @@ function hydrateIdentity(row: IdentityRow): AppIdentity {
   };
 }
 
+/**
+ * Distinguishes "clear this column" from "leave it alone" for optional inputs.
+ * `null` writes null, `undefined` keeps whatever the row already had. Needed
+ * because a rotated credential must drop a stale verification timestamp, which
+ * a plain `input.x || existing?.x || null` fallback can never express.
+ */
+function resolveNullable(next: string | null | undefined, existing: string | null | undefined): string | null {
+  if (next === null) return null;
+  if (next === undefined) return existing ?? null;
+  return next.trim() || existing || null;
+}
+
 function hydrateProviderConnection(row: ProviderConnectionRow): ProviderConnection {
   return {
     id: row.id,
@@ -1144,10 +1194,13 @@ function hydrateProviderConnection(row: ProviderConnectionRow): ProviderConnecti
     accountLabel: row.accountLabel ?? undefined,
     status: row.status as ProviderConnection["status"],
     tokenReference: row.tokenReference ?? undefined,
+    baseUrl: row.baseUrl ?? undefined,
     quotaLabel: row.quotaLabel ?? undefined,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     lastConnectedAt: row.lastConnectedAt ?? undefined,
+    lastVerifiedAt: row.lastVerifiedAt ?? undefined,
+    verificationDetail: row.verificationDetail ?? undefined,
   };
 }
 
