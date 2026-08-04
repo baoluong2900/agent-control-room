@@ -29,6 +29,13 @@ type RunningProcess = {
   conversationId?: string;
 };
 
+/**
+ * Ceiling on the structured-chat stdout buffer. The conversation id arrives in the
+ * CLI's first JSON object, so this only has to be wide enough to hold that; without
+ * a bound, a chatty run would keep every byte it ever printed in memory.
+ */
+const STRUCTURED_CHAT_BUFFER_LIMIT = 64 * 1024;
+
 const statusHints: Array<{ match: RegExp; status: AgentStatus }> = [
   { match: /\b(plan|planning|strategy|roadmap)\b/i, status: "planning" },
   { match: /\b(read|reading|open|scan|search|grep|rg)\b/i, status: "reading" },
@@ -311,6 +318,13 @@ export class AgentProcessManager {
     if (running?.structuredChat && type === "run:stdout") {
       running.stdoutBuffer += message;
       running.conversationId = extractConversationId(running.stdoutBuffer) ?? running.conversationId;
+      // Once the id is known the buffer has done its job, so drop it rather than
+      // accumulating a whole chat's stdout in memory for the life of the run. Until
+      // then keep the head: the id sits in the first JSON object the CLI prints, so
+      // clamping the tail would throw away the very bytes we are waiting for.
+      running.stdoutBuffer = running.conversationId
+        ? ""
+        : running.stdoutBuffer.slice(0, STRUCTURED_CHAT_BUFFER_LIMIT);
     }
 
     const hintedStatus = statusHints.find(({ match }) => match.test(message))?.status;

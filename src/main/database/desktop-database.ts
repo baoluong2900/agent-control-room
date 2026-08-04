@@ -25,6 +25,7 @@ import type {
   TaskSaveInput,
   TaskStatus,
 } from "@contracts";
+import { logRetention, truncateLogMessage } from "./log-retention";
 import { appMigrations, runMigrations, schemaVersion, type AppliedMigration } from "./migrations";
 import { ensureColumns } from "./sqlite-types";
 import type { SqliteDatabase } from "./sqlite-types";
@@ -192,6 +193,8 @@ const taskSelectColumns = `
 export class DesktopDatabase {
   readonly workflows: WorkflowRepository;
   private appliedMigrations: AppliedMigration[] = [];
+  /** Rows appended per run since its last prune; see `appendTerminalLog`. */
+  private readonly logAppendsSincePrune = new Map<string, number>();
 
   private constructor(private readonly db: SqliteDatabase) {
     this.workflows = new WorkflowRepository(db);
@@ -206,7 +209,22 @@ export class DesktopDatabase {
     database.migrate();
     database.reconcileInterruptedAgentRuns();
     database.ensureDefaultIdentity();
+    database.sweepExpiredTerminalLogs();
     return database;
+  }
+
+  /**
+   * Startup retention sweep. Deliberately not fatal: a failed cleanup means the
+   * database is larger than we would like, which is not a reason to refuse to open
+   * the app. Returns the number of rows dropped.
+   */
+  sweepExpiredTerminalLogs(now = new Date()): number {
+    const cutoff = new Date(now.getTime() - logRetention.maxRunAgeDays * 24 * 60 * 60 * 1000).toISOString();
+    try {
+      return this.pruneOldTerminalLogs(cutoff);
+    } catch {
+      return 0;
+    }
   }
 
   getAppIdentity(): AppIdentity {
@@ -497,13 +515,71 @@ export class DesktopDatabase {
       .run(status, endedAt, exitCode ?? null, conversationId ?? null, runId);
   }
 
+  /**
+   * Appends one terminal log row, clamping the message and periodically pruning the
+   * run's oldest rows. See `log-retention.ts` for why both caps exist.
+   */
   appendTerminalLog(runId: string, stream: "stdout" | "stderr" | "event" | "stdin", message: string): void {
+    const { message: stored } = truncateLogMessage(message);
     this.db
       .prepare(
         `insert into terminal_logs (run_id, stream, message, created_at)
          values (?, ?, ?, ?)`,
       )
-      .run(runId, stream, message, new Date().toISOString());
+      .run(runId, stream, stored, new Date().toISOString());
+
+    // Amortised: counting and deleting on every line would double the write cost of
+    // the hot output path for a bound that only matters after thousands of rows.
+    const appended = (this.logAppendsSincePrune.get(runId) ?? 0) + 1;
+    if (appended < logRetention.pruneIntervalRows) {
+      this.logAppendsSincePrune.set(runId, appended);
+      return;
+    }
+    this.logAppendsSincePrune.set(runId, 0);
+    this.pruneTerminalLogs(runId);
+  }
+
+  /**
+   * Drops the oldest rows for a run beyond `maxRowsPerRun`, keeping the newest —
+   * the terminal reads the tail, so recent output is what a reopened pane needs.
+   * Returns how many rows were removed.
+   */
+  pruneTerminalLogs(runId: string, maxRows = logRetention.maxRowsPerRun): number {
+    const result = this.db
+      .prepare(
+        `delete from terminal_logs
+         where run_id = ?
+           and id not in (
+             select id from terminal_logs where run_id = ? order by id desc limit ?
+           )`,
+      )
+      .run(runId, runId, maxRows) as { changes?: number } | undefined;
+    return Number(result?.changes ?? 0);
+  }
+
+  /**
+   * Drops logs for runs that finished before `cutoff`. Called on app start: nobody
+   * reopens a month-old terminal, and the rows are the largest thing in the file.
+   * Runs still in flight have no `ended_at` and are never swept.
+   */
+  pruneOldTerminalLogs(cutoff: string): number {
+    const result = this.db
+      .prepare(
+        `delete from terminal_logs
+         where run_id in (
+           select id from agent_runs where ended_at is not null and ended_at < ?
+         )`,
+      )
+      .run(cutoff) as { changes?: number } | undefined;
+    return Number(result?.changes ?? 0);
+  }
+
+  /** Row count for a run's logs; used by retention tests and diagnostics. */
+  countTerminalLogs(runId: string): number {
+    const row = this.db
+      .prepare("select count(*) as total from terminal_logs where run_id = ?")
+      .get(runId) as { total: number | null } | undefined;
+    return row?.total ?? 0;
   }
 
   listTerminalLogs(runId: string, limit = 400): TerminalLogRow[] {
@@ -791,7 +867,7 @@ export class DesktopDatabase {
       module: (row.module as AgentModuleId | null) ?? undefined,
       model: row.model,
       providerConnectionId: row.providerConnectionId ?? undefined,
-      accent: row.accent ?? "#8b5cf6",
+      accent: row.accent ?? "#a78bfa",
       cwd: row.cwd ?? undefined,
       systemPrompt: row.systemPrompt ?? undefined,
       extraArgs: row.extraArgs ?? undefined,
