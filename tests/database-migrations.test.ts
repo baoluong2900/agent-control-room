@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -162,5 +163,51 @@ test("versioned columns exist on the tables the app reads", async () => {
 
   assert.equal(connection.lastVerifiedAt, undefined);
   assert.equal(connection.verificationDetail, undefined);
+  db.close();
+});
+
+test("a pre-upgrade database gains the new columns without losing its rows", async () => {
+  const dir = tempDir("legacy-upgrade");
+  fs.mkdirSync(dir, { recursive: true });
+  const sqlite = await import("node:sqlite");
+
+  // A file shaped like one that shipped before workflow-step agent binding and
+  // provider base URLs existed, carrying rows a real user would expect to keep.
+  const legacy = new sqlite.DatabaseSync(path.join(dir, "agentic-workspace.sqlite"));
+  legacy.exec(`
+    create table provider_connections (
+      id text primary key, user_id text not null, provider text not null,
+      auth_mode text not null, storage_mode text not null, account_label text,
+      status text not null, token_reference text, quota_label text,
+      created_at text not null, updated_at text not null, last_connected_at text
+    );
+    create table workflows (
+      id text primary key, name text not null, project_id text,
+      created_at text not null default current_timestamp
+    );
+    create table workflow_steps (
+      id text primary key, workflow_id text not null, agent_cli_id text not null,
+      step_order integer not null, prompt_template text not null
+    );
+    insert into provider_connections values
+      ('c1','u1','custom-api','api-key','local','legacy acct','connected','ref-1','API key','2025-01-01','2025-01-01',null);
+    insert into workflows (id, name, created_at) values ('wf1','Legacy WF','2025-01-01');
+    insert into workflow_steps values ('s1','wf1','claude',1,'do the legacy thing');
+  `);
+  legacy.close();
+
+  const db = await DesktopDatabase.open(dir);
+
+  assert.equal(db.schemaVersion(), latestVersion);
+
+  const connection = db.listProviderConnections().find((entry) => entry.id === "c1");
+  assert.equal(connection?.accountLabel, "legacy acct", "an existing connection must survive the upgrade");
+  assert.equal(connection?.baseUrl, undefined, "a legacy row has no proxy endpoint yet");
+
+  const workflow = db.workflows.get("wf1");
+  assert.equal(workflow?.name, "Legacy WF");
+  assert.equal(workflow?.steps[0].instruction, "do the legacy thing");
+  assert.equal(workflow?.steps[0].profileId, undefined, "a legacy step is unbound until the user picks a profile");
+
   db.close();
 });

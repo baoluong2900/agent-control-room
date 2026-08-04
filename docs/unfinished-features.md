@@ -17,6 +17,18 @@ Ngày ghi nhận: 2026-08-04.
 | P2 | Agents | Agent run không có pause/resume/restart/concurrency limit; chat resume chỉ hỗ trợ Claude/Agy JSON. | Thêm lifecycle actions và capability flags theo provider. |
 | P2 | AI gateway docs | `docs/aiagnet.md` mô tả 9Router/CLIProxyAPI sidecar, nhưng runtime/package hiện chưa có router process hoặc `/v1` endpoint. | Gắn nhãn tài liệu này là proposal, hoặc implement gateway sidecar thật. |
 
+## Đã sửa (2026-08-04): workflow step ↔ agent connection
+
+Ba khoảng trống dưới đây đã được implement, ghi lại ở đây vì chúng là nguyên nhân chính của cảm giác “agent không có connection, không nối được với nhau”:
+
+1. **Workflow step giờ nhận credential thật.** Trước đây `spawnStep()` chỉ merge `{ ...process.env, FORCE_COLOR }`, nên profile/provider connection user cấu hình trong Agent Builder không hề tới workflow. Nay cả hai đường spawn đều đi qua `resolveProviderEnv()` tại `src/main/agents/provider-resolver.ts`. `WorkflowStepDefinition` có thêm `profileId` và `providerConnectionId` (`src/contracts/workflow.ts`), chọn được trong editor.
+2. **Step truyền output cho nhau.** `executeSteps()` tích luỹ `WorkflowStepOutcome[]` và interpolate qua `applyStepContext()` tại `src/main/workflows/step-context.ts`, hỗ trợ `{{previous.output}}` và `{{steps.<id|name>.output}}`. Step không có placeholder vẫn được append context của step trước, nên workflow cũ tự động chain. Context sống sót qua approval gate vì được park cùng `PendingApproval`.
+3. **Provider connection có `baseUrl`.** Đủ để đấu proxy/router: `buildProviderRuntimeEnv()` set `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` (+ biến thể `_API_BASE`/`_API_URL`) khi connection có endpoint. Field này chỉ hiện cho provider mà CLI thật sự đọc env đó, xem `supportsBaseUrl()` tại `src/renderer/settings/provider-catalog.ts`.
+
+Lưu ý về mục R1 bên dưới: `baseUrl` cho phép **trỏ tới** một router đang chạy, nhưng app vẫn chưa tự spawn/quản lý sidecar 9Router/CLIProxyAPI. Phần đó vẫn là proposal.
+
+Test: `tests/workflow-agent-binding.test.ts`. Migration cho DB cũ: version 4 và 5 trong `src/main/database/migrations.ts`.
+
 ## 1. Workflows: trigger được khai báo nhiều hơn scheduler thực sự hỗ trợ
 
 ### W1 — Các trigger ngoài `schedule` chưa tự chạy

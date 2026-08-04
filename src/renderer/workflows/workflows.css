@@ -903,6 +903,7 @@
 }
 
 .wf-field textarea { line-height: 1.5; resize: vertical; }
+.wf-field-hint { color: #7e7594; font-size: 10px; line-height: 1.45; }
 .wf-field input:focus,
 .wf-field select:focus,
 .wf-field textarea:focus { border-color: #60a5fa; outline: none; }
