@@ -65,6 +65,15 @@ type RunRow = {
   duration_ms: number | null;
 };
 
+/** Aggregates for one reporting window, used to build period-over-period deltas. */
+export type WorkflowPeriodCounts = {
+  runs: number;
+  successes: number;
+  /** Workflows that existed at the end of the window. */
+  workflows: number;
+  activeWorkflows: number;
+};
+
 type StepRunRow = {
   id: string;
   workflow_run_id: string;
@@ -489,6 +498,45 @@ export class WorkflowRepository {
       durationMs: run.duration_ms,
       steps: this.listStepRuns(run.id),
     }));
+  }
+
+  /**
+   * Counts runs and successes in a half-open window `[since, until)`, plus how
+   * many workflows existed at `until`. Aggregated in SQL rather than by loading
+   * runs, because the metrics header asks for this on every page render and the
+   * run table is the fastest-growing one in the database.
+   *
+   * A workflow's "existed at" is its `created_at`; rows written before that column
+   * had a default are counted as always having existed, which is the same
+   * assumption `list()` makes when it sorts them.
+   */
+  countRunsInPeriod(since: string, until: string): WorkflowPeriodCounts {
+    const runs = this.db
+      .prepare(
+        `select
+           count(*) as total,
+           sum(case when status = 'success' then 1 else 0 end) as successes
+         from workflow_runs
+         where started_at >= ? and started_at < ?`,
+      )
+      .get(since, until) as { total: number | null; successes: number | null } | undefined;
+
+    const workflows = this.db
+      .prepare(
+        `select
+           count(*) as total,
+           sum(case when status = 'active' then 1 else 0 end) as active
+         from workflows
+         where created_at < ?`,
+      )
+      .get(until) as { total: number | null; active: number | null } | undefined;
+
+    return {
+      runs: runs?.total ?? 0,
+      successes: runs?.successes ?? 0,
+      workflows: workflows?.total ?? 0,
+      activeWorkflows: workflows?.active ?? 0,
+    };
   }
 
   getRun(runId: string): WorkflowRunRecord | null {

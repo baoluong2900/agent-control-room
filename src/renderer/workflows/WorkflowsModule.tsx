@@ -557,7 +557,11 @@ function WorkflowStats({ metrics }: { metrics: WorkflowMetrics | null }) {
             <div className="wf-stat-copy">
               <small>{card.label}</small>
               <strong>{card.value}</strong>
-              {card.delta !== undefined && <em className="wf-stat-delta">▲ {card.delta}% from last month</em>}
+              {card.delta !== undefined && (
+                <em className={`wf-stat-delta ${card.delta < 0 ? "is-down" : "is-up"}`}>
+                  {card.delta < 0 ? "▼" : "▲"} {Math.abs(card.delta)}% from last month
+                </em>
+              )}
             </div>
           </section>
         );

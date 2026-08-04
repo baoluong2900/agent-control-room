@@ -100,8 +100,17 @@ export class WorkflowService {
     return this.repo.listRuns(workflowId, limit);
   }
 
-  /** Aggregate metrics for the four stat cards at the top of the page. */
-  metrics(): WorkflowMetrics {
+  /**
+   * Aggregate metrics for the four stat cards at the top of the page, including
+   * each card's change against the previous 30-day window.
+   *
+   * The deltas compare the last 30 days to the 30 before that. A delta is omitted
+   * rather than reported as 0 when there is no basis for one — no prior activity
+   * at all, or a count that cannot be expressed as a percentage change from zero.
+   * The card then simply shows no trend line, which is honest; showing "0%" or
+   * "+100%" for "we have no history yet" is not.
+   */
+  metrics(now = new Date()): WorkflowMetrics {
     const workflows = this.repo.list();
     const totalWorkflows = workflows.length;
     const activeWorkflows = workflows.filter((wf) => wf.status === "active").length;
@@ -112,11 +121,23 @@ export class WorkflowService {
         ? 0
         : Number((rated.reduce((sum, wf) => sum + wf.stats.successRate, 0) / rated.length).toFixed(1));
 
+    const periodMs = 30 * 24 * 60 * 60 * 1000;
+    const end = now.toISOString();
+    const midpoint = new Date(now.getTime() - periodMs).toISOString();
+    const start = new Date(now.getTime() - periodMs * 2).toISOString();
+
+    const current = this.repo.countRunsInPeriod(midpoint, end);
+    const previous = this.repo.countRunsInPeriod(start, midpoint);
+
     return {
       totalWorkflows,
       activeWorkflows,
       automatedRuns,
       successRate,
+      totalDeltaPercent: percentChange(current.workflows, previous.workflows),
+      activeDeltaPercent: percentChange(current.activeWorkflows, previous.activeWorkflows),
+      runsDeltaPercent: percentChange(current.runs, previous.runs),
+      successDeltaPercent: percentChange(successRateOf(current), successRateOf(previous)),
     };
   }
 
@@ -738,6 +759,25 @@ export class WorkflowService {
   private emit(event: WorkflowEvent): void {
     this.webContentsProvider()?.send("workflow:event", event);
   }
+}
+
+/**
+ * Percentage change from `previous` to `current`, rounded to one decimal.
+ *
+ * Returns undefined when no meaningful percentage exists: a change from zero is
+ * an infinite increase, not "+100%", and zero-to-zero is not a 0% trend — it is
+ * an absence of data. Callers omit the field entirely in those cases so the UI
+ * shows no trend rather than a fabricated one.
+ */
+function percentChange(current: number, previous: number): number | undefined {
+  if (previous === 0) return undefined;
+  return Number((((current - previous) / previous) * 100).toFixed(1));
+}
+
+/** Success rate for a window, as a 0-100 percentage. */
+function successRateOf(counts: { runs: number; successes: number }): number {
+  if (counts.runs === 0) return 0;
+  return (counts.successes / counts.runs) * 100;
 }
 
 function activityKindFor(status: WorkflowRunStatus): WorkflowActivityEntry["kind"] {
