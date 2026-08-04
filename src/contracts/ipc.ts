@@ -68,6 +68,7 @@ export interface AgenticDesktopApi {
     pingAll: () => Promise<AgentPingResult[]>;
     models: (cliId: AgentCliId) => Promise<AgentModelProbe>;
     start: (input: AgentRunInput) => Promise<AgentProcess>;
+    restart: (runId: string) => Promise<AgentProcess>;
     stop: (runId: string) => Promise<void>;
     send: (runId: string, data: string) => Promise<boolean>;
     sessions: () => Promise<AgentSessionSummary[]>;

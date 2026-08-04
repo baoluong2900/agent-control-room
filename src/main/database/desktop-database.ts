@@ -598,6 +598,29 @@ export class DesktopDatabase {
       .all(runId, limit) as TerminalLogRow[];
   }
 
+  getAgentRun(runId: string): AgentRunRecord | null {
+    const row = this.db
+      .prepare(
+        `select
+           id,
+           cli_id as cliId,
+           cwd,
+           prompt,
+           model,
+           profile_id as profileId,
+           task_id as taskId,
+           conversation_id as conversationId,
+           status,
+           started_at as startedAt,
+           ended_at as endedAt,
+           exit_code as exitCode
+         from agent_runs
+         where id = ?`,
+      )
+      .get(runId) as AgentRunRecord | undefined;
+    return row ?? null;
+  }
+
   listAgentRuns(): AgentRunRecord[] {
     return this.db
       .prepare(

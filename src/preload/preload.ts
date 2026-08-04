@@ -45,6 +45,7 @@ const api: AgenticDesktopApi = {
     pingAll: () => ipcRenderer.invoke("agent:ping-all"),
     models: (cliId: AgentCliId) => ipcRenderer.invoke("agent:models", cliId),
     start: (input: AgentRunInput) => ipcRenderer.invoke("agent:start", input),
+    restart: (runId: string) => ipcRenderer.invoke("agent:restart", runId),
     stop: (runId: string) => ipcRenderer.invoke("agent:stop", runId),
     send: (runId: string, data: string) => ipcRenderer.invoke("agent:send", runId, data),
     sessions: () => ipcRenderer.invoke("agent:sessions"),

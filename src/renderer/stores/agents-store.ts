@@ -63,6 +63,7 @@ type AgentsState = {
   saveProfile: (input: AgentProfileInput) => Promise<AgentProfile>;
   deleteProfile: (id: string) => Promise<void>;
   runProfile: (profile: AgentProfile, options: { prompt: string; cwd: string; interactive?: boolean; uiMode?: "terminal" | "chat"; resumeConversationId?: string }) => Promise<string | null>;
+  restartRun: (runId: string) => Promise<string | null>;
   stopRun: (runId: string) => Promise<void>;
   sendInput: (runId: string, data: string) => Promise<boolean>;
   setActiveRunId: (runId: string | null) => void;
@@ -230,6 +231,25 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
         },
       }));
 
+      await Promise.all([get().refreshSessions(), get().refreshHistory()]);
+      return process.runId;
+    } catch (error) {
+      set({ error: toMessage(error) });
+      return null;
+    }
+  },
+
+  async restartRun(runId) {
+    try {
+      const process = await window.agentic.agents.restart(runId);
+      set((state) => ({
+        activeRunId: process.runId,
+        error: null,
+        runtimes: {
+          ...state.runtimes,
+          ...runtimeForRestart(state.history, runId, process.runId, process.status),
+        },
+      }));
       await Promise.all([get().refreshSessions(), get().refreshHistory()]);
       return process.runId;
     } catch (error) {
@@ -417,6 +437,17 @@ function activityTitle(event: AgentEvent): string {
     default:
       return event.type;
   }
+}
+
+function runtimeForRestart(
+  history: AgentRunRecord[],
+  oldRunId: string,
+  newRunId: string,
+  status: AgentStatus,
+): Record<string, AgentRuntime> {
+  const oldRun = history.find((run) => run.id === oldRunId);
+  if (!oldRun?.profileId) return {};
+  return { [oldRun.profileId]: { runId: newRunId, status, startedAt: new Date().toISOString() } };
 }
 
 function getLatestConversationId(history: AgentRunRecord[], profileId: string): string | undefined {

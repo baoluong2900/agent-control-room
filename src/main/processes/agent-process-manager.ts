@@ -10,7 +10,7 @@ import type {
   AgentSessionSummary,
   AgentStatus,
 } from "@contracts";
-import { buildInvocation, cliDisplayNames, quoteCommand, usesStructuredChat } from "../agents/commands";
+import { buildInvocation, quoteCommand, usesStructuredChat } from "../agents/commands";
 import { resolveProviderEnv } from "../agents/provider-resolver";
 import type { ProviderSecretVault } from "../settings/provider-secret-vault";
 import type { DesktopDatabase } from "../database/desktop-database";
@@ -28,6 +28,14 @@ type RunningProcess = {
   stdoutBuffer: string;
   conversationId?: string;
 };
+
+type QueuedProcess = {
+  runId: string;
+  input: AgentRunInput;
+  startedAt: string;
+};
+
+const MAX_CONCURRENT_RUNS = 3;
 
 /**
  * Ceiling on the structured-chat stdout buffer. The conversation id arrives in the
@@ -47,6 +55,8 @@ const statusHints: Array<{ match: RegExp; status: AgentStatus }> = [
 
 export class AgentProcessManager {
   private readonly running = new Map<string, RunningProcess>();
+  private readonly queued: QueuedProcess[] = [];
+  private drainingQueue = false;
   /**
    * Runs stop() has already settled. The map entry is gone by the time the child
    * actually exits, so the decision has to outlive it.
@@ -62,6 +72,23 @@ export class AgentProcessManager {
   ) {}
 
   async start(input: AgentRunInput): Promise<AgentProcess> {
+    return this.enqueue(input);
+  }
+
+  async restart(runId: string): Promise<AgentProcess> {
+    const live = this.running.get(runId);
+    const queued = this.queued.find((entry) => entry.runId === runId);
+    const input = live?.input ?? queued?.input ?? this.inputFromHistory(runId);
+    if (!input) throw new Error(`Run ${runId} cannot be restarted.`);
+
+    if (live || queued) {
+      await this.stop(runId);
+    }
+
+    return this.enqueue({ ...input, resumeConversationId: undefined });
+  }
+
+  private async enqueue(input: AgentRunInput): Promise<AgentProcess> {
     const normalizedPrompt = input.prompt.trim();
     if (!input.cwd.trim()) {
       throw new Error("Project folder is required before starting an agent.");
@@ -72,8 +99,6 @@ export class AgentProcessManager {
 
     const runId = randomUUID();
     const startedAt = new Date().toISOString();
-    const displayName = cliDisplayNames[input.cliId] ?? input.cliId;
-
     const record: AgentRunRecord = {
       id: runId,
       cliId: input.cliId,
@@ -104,9 +129,39 @@ export class AgentProcessManager {
       taskId: input.taskId,
       uiMode: input.uiMode,
       conversationId: input.resumeConversationId,
+      message: this.running.size >= MAX_CONCURRENT_RUNS ? `Queued behind ${this.running.size} running agent runs.` : undefined,
       timestamp: startedAt,
     });
 
+    const queued: QueuedProcess = { runId, input: { ...input, prompt: normalizedPrompt }, startedAt };
+    this.queued.push(queued);
+    void this.drainQueue();
+
+    return {
+      runId,
+      status: "queued",
+      command: "(queued)",
+      args: [],
+      interactive: Boolean(input.interactive),
+    };
+  }
+
+  private async drainQueue(): Promise<void> {
+    if (this.shuttingDown || this.drainingQueue) return;
+    this.drainingQueue = true;
+    try {
+      while (this.running.size < MAX_CONCURRENT_RUNS && this.queued.length > 0) {
+        const next = this.queued.shift();
+        if (!next) return;
+        await this.spawnQueued(next);
+      }
+    } finally {
+      this.drainingQueue = false;
+    }
+  }
+
+  private async spawnQueued({ runId, input, startedAt }: QueuedProcess): Promise<void> {
+    const normalizedPrompt = input.prompt.trim();
     let invocation: Awaited<ReturnType<typeof buildInvocation>>;
     let providerEnv: NodeJS.ProcessEnv;
     try {
@@ -124,10 +179,11 @@ export class AgentProcessManager {
         status: "failed",
         profileId: input.profileId,
         taskId: input.taskId,
+        uiMode: input.uiMode,
         message,
         timestamp: new Date().toISOString(),
       });
-      throw error;
+      return;
     }
 
     const child = spawn(invocation.executable, invocation.args, {
@@ -211,9 +267,11 @@ export class AgentProcessManager {
         status: "failed",
         profileId: input.profileId,
         taskId: input.taskId,
+        uiMode: input.uiMode,
         message: error.message,
         timestamp: new Date().toISOString(),
       });
+      void this.drainQueue();
     });
 
     child.on("exit", (code) => {
@@ -239,15 +297,37 @@ export class AgentProcessManager {
         message: `Process exited with code ${code ?? "unknown"}`,
         timestamp: new Date().toISOString(),
       });
+      void this.drainQueue();
     });
+  }
+
+  private inputFromHistory(runId: string): AgentRunInput | null {
+    const record = this.db.getAgentRun(runId);
+    if (!record) return null;
+
+    const profile = record.profileId
+      ? this.db.listAgentProfiles().find((candidate) => candidate.id === record.profileId)
+      : undefined;
+    const prompt = record.prompt === "(interactive session)" ? "" : record.prompt;
 
     return {
-      runId,
-      status: "planning",
-      pid: child.pid,
-      command: invocation.executable,
-      args: invocation.args,
-      interactive: Boolean(input.interactive),
+      cliId: profile?.cliId ?? record.cliId,
+      cwd: profile?.cwd ?? record.cwd,
+      prompt,
+      model: profile?.model ?? record.model,
+      profileId: record.profileId,
+      taskId: record.taskId,
+      providerConnectionId: profile?.providerConnectionId,
+      interactive: profile?.interactive,
+      uiMode: "terminal",
+      extraArgs: profile?.extraArgs,
+      commandOverride: profile?.commandOverride,
+      promptMode: profile?.promptMode,
+      forceTty: profile?.forceTty,
+      autoApprove: profile?.autoApprove,
+      systemPrompt: profile?.systemPrompt,
+      options: profile?.options,
+      shellCommand: (profile?.cliId ?? record.cliId) === "shell" ? prompt : undefined,
     };
   }
 
@@ -262,6 +342,26 @@ export class AgentProcessManager {
   }
 
   async stop(runId: string): Promise<void> {
+    const queuedIndex = this.queued.findIndex((entry) => entry.runId === runId);
+    if (queuedIndex >= 0) {
+      const [queued] = this.queued.splice(queuedIndex, 1);
+      this.db.updateAgentRunStatus(runId, "stopped", null);
+      if (queued.input.taskId) {
+        this.db.finishTaskRun(queued.input.taskId, "stopped", runId);
+      }
+      this.emit({
+        runId,
+        type: "run:status",
+        status: "stopped",
+        profileId: queued.input.profileId,
+        taskId: queued.input.taskId,
+        uiMode: queued.input.uiMode,
+        message: "Queued agent run cancelled",
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
     const running = this.running.get(runId);
     if (!running) return;
 
@@ -280,9 +380,11 @@ export class AgentProcessManager {
       status: "stopped",
       profileId: running.input.profileId,
       taskId: running.input.taskId,
+      uiMode: running.input.uiMode,
       message: "Agent stopped by user",
       timestamp: new Date().toISOString(),
     });
+    void this.drainQueue();
   }
 
   /**
@@ -292,13 +394,14 @@ export class AgentProcessManager {
    */
   stopAll(): void {
     this.shuttingDown = true;
+    this.queued.length = 0;
     for (const runId of [...this.running.keys()]) {
       void this.stop(runId);
     }
   }
 
   sessions(): AgentSessionSummary[] {
-    return [...this.running.entries()].map(([runId, running]) => ({
+    const running = [...this.running.entries()].map(([runId, running]) => ({
       runId,
       cliId: running.input.cliId,
       profileId: running.input.profileId,
@@ -310,6 +413,20 @@ export class AgentProcessManager {
       startedAt: running.startedAt,
       command: quoteCommand([running.command, ...running.args]),
     }));
+
+    const queued = this.queued.map((entry, index) => ({
+      runId: entry.runId,
+      cliId: entry.input.cliId,
+      profileId: entry.input.profileId,
+      model: entry.input.model,
+      cwd: entry.input.cwd,
+      status: "queued" as AgentStatus,
+      interactive: Boolean(entry.input.interactive),
+      startedAt: entry.startedAt,
+      command: `Queued (${index + 1}/${this.queued.length})`,
+    }));
+
+    return [...running, ...queued];
   }
 
   private handleOutput(runId: string, type: "run:stdout" | "run:stderr", message: string): void {

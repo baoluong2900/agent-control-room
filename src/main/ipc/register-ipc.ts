@@ -77,6 +77,7 @@ export function registerIpcHandlers({
   ipcMain.handle("agent:models", (_event, cliId: AgentCliId) => probeAgentModels(cliId));
 
   ipcMain.handle("agent:start", (_event, input: AgentRunInput) => agentProcessManager.start(input));
+  ipcMain.handle("agent:restart", (_event, runId: string) => agentProcessManager.restart(runId));
   ipcMain.handle("agent:stop", (_event, runId: string) => agentProcessManager.stop(runId));
   ipcMain.handle("agent:send", (_event, runId: string, data: string) => agentProcessManager.send(runId, data));
   ipcMain.handle("agent:sessions", () => agentProcessManager.sessions());

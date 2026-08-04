@@ -1,6 +1,6 @@
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { CornerDownLeft, Eraser, Play, Radio, Square, X } from "lucide-react";
+import { CornerDownLeft, Eraser, Play, Radio, RotateCcw, Square, X } from "lucide-react";
 import type { AgentProfile, AgentSessionSummary } from "@contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { statusLabel, useAgentsStore } from "../stores/agents-store";
@@ -29,7 +29,7 @@ export function AgentTerminal({
   cwd: string;
   onClose: () => void;
 }) {
-  const { runtimes, sessions, terminals, clearTerminal, hydrateTerminal, runProfile, sendInput, stopRun } =
+  const { runtimes, sessions, terminals, clearTerminal, hydrateTerminal, restartRun, runProfile, sendInput, stopRun } =
     useAgentsStore();
   const runtime = runtimes[profile.id];
   const runId = runtime?.runId ?? null;
@@ -137,6 +137,16 @@ export function AgentTerminal({
     if (runId && live) await sendInput(runId, "\u0003");
   };
 
+  const restart = async () => {
+    if (!runId) return;
+    setBusy(true);
+    try {
+      await restartRun(runId);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="agent-terminal" ref={sectionRef}>
       <header>
@@ -162,7 +172,11 @@ export function AgentTerminal({
             <Play size={13} />
             Run
           </button>
-          <button className="ghost-button" onClick={interrupt} disabled={!live}>
+          <button className="ghost-button" onClick={restart} disabled={busy || !runId}>
+            <RotateCcw size={13} />
+            Restart
+          </button>
+          <button className="ghost-button" onClick={interrupt} disabled={!live || session?.status === "queued"}>
             Ctrl+C
           </button>
           <button className="ghost-button" onClick={() => runId && stopRun(runId)} disabled={!live}>

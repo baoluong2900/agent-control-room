@@ -22,6 +22,22 @@ function statusOf(db: DesktopDatabase, runId: string): string | undefined {
   return db.listAgentRuns().find((run) => run.id === runId)?.status;
 }
 
+async function waitForStatus(db: DesktopDatabase, runId: string, status: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (statusOf(db, runId) === status) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`run ${runId} never reached ${status}`);
+}
+
+async function waitForSessionCount(manager: AgentProcessManager, count: number): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (manager.sessions().length === count) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`session count never reached ${count}`);
+}
+
 test("stopping a run keeps the stopped status once SIGTERM lands", async () => {
   const db = await openDatabase("stop-status");
   const manager = new AgentProcessManager(db, () => null);
@@ -81,4 +97,103 @@ test("stopAll lets the app close the database without a late write throwing", as
 
   await new Promise((resolve) => setTimeout(resolve, 400));
   assert.ok(!manager.sessions().some((session) => session.runId === started.runId));
+});
+
+test("agent starts beyond the concurrency limit stay queued until a slot opens", async () => {
+  const db = await openDatabase("concurrency-limit");
+  const manager = new AgentProcessManager(db, () => null);
+
+  const runs = await Promise.all(
+    Array.from({ length: 4 }, (_, index) =>
+      manager.start({
+        cliId: "shell",
+        cwd: process.cwd(),
+        prompt: `sleep ${index}`,
+        shellCommand: "sleep 30",
+      }),
+    ),
+  );
+
+  await waitForSessionCount(manager, 4);
+  const sessions = manager.sessions();
+  assert.equal(sessions.filter((session) => session.status === "queued").length, 1);
+  assert.equal(sessions.filter((session) => session.status !== "queued").length, 3);
+  assert.equal(statusOf(db, runs[3].runId), "queued");
+
+  await manager.stop(runs[0].runId);
+  await waitForStatus(db, runs[3].runId, "planning");
+  assert.equal(manager.sessions().filter((session) => session.status !== "queued").length, 3);
+
+  manager.stopAll();
+  db.close();
+});
+
+test("a queued run can be cancelled before it ever spawns", async () => {
+  const db = await openDatabase("cancel-queued");
+  const manager = new AgentProcessManager(db, () => null);
+
+  const runs = await Promise.all(
+    Array.from({ length: 4 }, (_, index) =>
+      manager.start({
+        cliId: "shell",
+        cwd: process.cwd(),
+        prompt: `queued ${index}`,
+        shellCommand: "sleep 30",
+      }),
+    ),
+  );
+  await waitForSessionCount(manager, 4);
+
+  await manager.stop(runs[3].runId);
+
+  assert.equal(statusOf(db, runs[3].runId), "stopped");
+  assert.equal(manager.sessions().some((session) => session.runId === runs[3].runId), false);
+
+  manager.stopAll();
+  db.close();
+});
+
+test("restarting a finished run creates a new run with the original command", async () => {
+  const db = await openDatabase("restart-finished");
+  const manager = new AgentProcessManager(db, () => null);
+
+  const first = await manager.start({
+    cliId: "shell",
+    cwd: process.cwd(),
+    prompt: "printf restart-ok",
+    shellCommand: "printf restart-ok",
+  });
+  await waitForExit(manager, first.runId);
+  await waitForStatus(db, first.runId, "completed");
+
+  const second = await manager.restart(first.runId);
+  assert.notEqual(second.runId, first.runId);
+  await waitForExit(manager, second.runId);
+  await waitForStatus(db, second.runId, "completed");
+
+  const logs = db.listTerminalLogs(second.runId);
+  assert.ok(logs.some((row) => row.message.includes("restart-ok")), "the restarted run used the saved prompt");
+  db.close();
+});
+
+test("restarting a live run stops it and queues a replacement", async () => {
+  const db = await openDatabase("restart-live");
+  const manager = new AgentProcessManager(db, () => null);
+
+  const first = await manager.start({
+    cliId: "shell",
+    cwd: process.cwd(),
+    prompt: "sleep 30",
+    shellCommand: "sleep 30",
+  });
+
+  await waitForStatus(db, first.runId, "planning");
+  const second = await manager.restart(first.runId);
+
+  assert.equal(statusOf(db, first.runId), "stopped");
+  assert.notEqual(second.runId, first.runId);
+  assert.ok(manager.sessions().some((session) => session.runId === second.runId));
+
+  manager.stopAll();
+  db.close();
 });
