@@ -1,11 +1,14 @@
 import fs, { type FSWatcher } from "node:fs";
 import path from "node:path";
 import type { WebContents } from "electron";
-import type { WorkflowDefinition, WorkflowEvent } from "@contracts";
+import type { WorkflowDefinition, WorkflowEvent, WorkflowTriggerType } from "@contracts";
 import { git } from "../git/git-service";
 import { type IssueSummary, gh, listOpenIssues, parseIssueTrigger } from "./issue-poller";
 import type { WorkflowService } from "./workflow-service";
 import { parseSchedule, previousOccurrence } from "./workflow-schedule";
+
+/** A workflow the `requireProject` filter has already proven has a project path. */
+type WithProject = WorkflowDefinition & { projectPath: string };
 
 type SchedulerOptions = {
   intervalMs?: number;
@@ -256,13 +259,9 @@ export class WorkflowSchedulerService {
     key: string;
     config: RefTrigger;
   }> {
-    for (const workflow of this.workflows.list()) {
-      const { projectPath, status, trigger, steps } = workflow;
-      if (status !== "active" || trigger.type !== "git-push" || !projectPath) continue;
-      if (!steps.some((step) => step.enabled)) continue;
-
-      const root = path.resolve(projectPath);
-      const config = parseRefTrigger(trigger.detail);
+    for (const workflow of this.eligible("git-push", true)) {
+      const root = path.resolve(workflow.projectPath);
+      const config = parseRefTrigger(workflow.trigger.detail);
       const branch = config.branch ?? "HEAD";
       const ref = config.remote ? `refs/remotes/${config.remote}/${branch}` : branch;
       yield { workflow, root, ref, key: `${root}@${ref}`, config };
@@ -292,12 +291,8 @@ export class WorkflowSchedulerService {
     const normalized = hook.trim().toLowerCase();
     if (!normalized) return fired;
 
-    for (const workflow of this.workflows.list()) {
-      const { status, trigger, steps } = workflow;
-      if (status !== "active" || trigger.type !== "webhook") continue;
-      if (!steps.some((step) => step.enabled)) continue;
-
-      const configured = trigger.detail?.trim().toLowerCase();
+    for (const workflow of this.eligible("webhook")) {
+      const configured = workflow.trigger.detail?.trim().toLowerCase();
       if (!configured || configured !== normalized) continue;
 
       // Same debounce rule as file-change: a provider that retries a delivery, or a
@@ -320,15 +315,7 @@ export class WorkflowSchedulerService {
 
   /** True when at least one active workflow is waiting on an inbound delivery. */
   hasActiveWebhookWorkflows(): boolean {
-    return this.workflows
-      .list()
-      .some(
-        (workflow) =>
-          workflow.status === "active" &&
-          workflow.trigger.type === "webhook" &&
-          Boolean(workflow.trigger.detail?.trim()) &&
-          workflow.steps.some((step) => step.enabled),
-      );
+    return this.eligible("webhook").some((workflow) => Boolean(workflow.trigger.detail?.trim()));
   }
 
   /**
@@ -347,11 +334,8 @@ export class WorkflowSchedulerService {
       // One `gh` call per repo, not per workflow: several workflows commonly watch
       // the same project and each poll is a network round-trip.
       const byRoot = new Map<string, WorkflowDefinition[]>();
-      for (const workflow of this.workflows.list()) {
-        const { status, trigger, steps, projectPath } = workflow;
-        if (status !== "active" || trigger.type !== "issue-created" || !projectPath) continue;
-        if (!steps.some((step) => step.enabled)) continue;
-        const root = path.resolve(projectPath);
+      for (const workflow of this.eligible("issue-created", true)) {
+        const root = path.resolve(workflow.projectPath);
         byRoot.set(root, [...(byRoot.get(root) ?? []), workflow]);
       }
 
@@ -403,12 +387,8 @@ export class WorkflowSchedulerService {
 
   /** Records currently-open issues without firing, so only later ones count as new. */
   async seedIssueBaselines(): Promise<void> {
-    for (const workflow of this.workflows.list()) {
-      const { status, trigger, steps, projectPath } = workflow;
-      if (status !== "active" || trigger.type !== "issue-created" || !projectPath) continue;
-      if (!steps.some((step) => step.enabled)) continue;
-
-      const root = path.resolve(projectPath);
+    for (const workflow of this.eligible("issue-created", true)) {
+      const root = path.resolve(workflow.projectPath);
       if (this.seenIssues.has(root)) continue;
       const issues = await this.listIssues(root);
       if (issues) this.seenIssues.set(root, new Set(issues.map((issue) => issue.number)));
@@ -421,6 +401,27 @@ export class WorkflowSchedulerService {
     if (labelled === null) return [];
     const allowed = new Set(labelled.map((issue) => issue.number));
     return issues.filter((issue) => allowed.has(issue.number));
+  }
+
+  /**
+   * Active workflows of one trigger type that have at least one enabled step.
+   *
+   * Every runner needs this same triple, and `requireProject` covers the runners
+   * that cannot do anything without a folder to work in. Keeping it in one place
+   * stops the five call sites drifting apart on what "eligible" means.
+   */
+  private eligible(type: WorkflowTriggerType, requireProject: true): WithProject[];
+  private eligible(type: WorkflowTriggerType, requireProject?: false): WorkflowDefinition[];
+  private eligible(type: WorkflowTriggerType, requireProject = false): WorkflowDefinition[] {
+    return this.workflows
+      .list()
+      .filter(
+        (workflow) =>
+          workflow.status === "active" &&
+          workflow.trigger.type === type &&
+          workflow.steps.some((step) => step.enabled) &&
+          (!requireProject || Boolean(workflow.projectPath)),
+      );
   }
 
   /** The scheduled moment this workflow owes a run for, or null when it is current. */
@@ -464,12 +465,7 @@ export class WorkflowSchedulerService {
   }
 
   private refreshFileWatchers(): void {
-    const desired = new Set(
-      this.workflows
-        .list()
-        .filter((workflow) => workflow.status === "active" && workflow.trigger.type === "file-change" && workflow.projectPath)
-        .map((workflow) => path.resolve(workflow.projectPath as string)),
-    );
+    const desired = new Set(this.eligible("file-change", true).map((workflow) => path.resolve(workflow.projectPath)));
 
     for (const [root, watcher] of this.fileWatchers.entries()) {
       if (desired.has(root)) continue;
