@@ -14,6 +14,7 @@ import { listAgentCatalog } from "../agents/catalog";
 import { pingAgentCli } from "../agents/probe";
 import type { DesktopDatabase } from "../database/desktop-database";
 import { readGitDiff } from "../git/git-service";
+import { defaultEndpointProbe, type EndpointProbe } from "../settings/provider-verification";
 import type { SettingsService } from "../settings/settings-service";
 
 const STALE_VERIFICATION_MS = 30 * 24 * 60 * 60_000;
@@ -25,6 +26,8 @@ export type DiagnosticsDependencies = {
   pingCli?: typeof pingAgentCli;
   checkExternalTool?: typeof checkTool;
   checkProject?: typeof collectProjectChecks;
+  /** Injection seam: the live gateway probe, so tests never touch the network. */
+  probeEndpoint?: EndpointProbe;
   now?: Date;
 };
 
@@ -79,10 +82,14 @@ export async function collectDiagnostics(
   ]);
 
   const now = dependencies.now ?? new Date();
+  const connections = settingsService.listProviderConnections();
   const checks = [
     ...(await (dependencies.checkProject ?? collectProjectChecks)(projectPath, git.installed)),
     ...collectDatabaseChecks(database),
-    ...collectProviderChecks(settingsService.listProviderConnections(), now),
+    ...collectProviderChecks(connections, now),
+    // Live, unlike every other provider check: a gateway is a process the user
+    // starts and stops outside this app, so stored status cannot answer "is it up".
+    ...(await collectGatewayChecks(connections, dependencies.probeEndpoint)),
   ];
 
   return {
@@ -295,6 +302,60 @@ export function collectProviderChecks(connections: ProviderConnection[], now = n
       action: { label: "Open Settings", target: "settings" },
     } satisfies DiagnosticCheck;
   });
+}
+
+/**
+ * Reports whether each configured gateway endpoint is answering right now.
+ *
+ * Separate from `collectProviderChecks`, which reads *stored* verification state:
+ * a gateway is a local process the user starts and stops independently of this app,
+ * so a row verified an hour ago tells you nothing about whether the proxy is up.
+ * This is the one live probe in Diagnostics, and it stays read-only — it reports
+ * reachability without touching the connection's stored status.
+ */
+export async function collectGatewayChecks(
+  connections: ProviderConnection[],
+  probeEndpoint: EndpointProbe = defaultEndpointProbe,
+): Promise<DiagnosticCheck[]> {
+  const gateways = connections.filter((connection) => connection.provider === "hermes-agent" && connection.baseUrl?.trim());
+  if (gateways.length === 0) return [];
+
+  return Promise.all(
+    gateways.map(async (connection): Promise<DiagnosticCheck> => {
+      const baseUrl = connection.baseUrl as string;
+      const name = connection.accountLabel?.trim() || connection.provider;
+      const probe = await probeEndpoint(baseUrl);
+
+      if (!probe.reachable) {
+        return {
+          key: `gateway:${connection.id}`,
+          label: `${name} endpoint`,
+          status: "fail",
+          detail: `${baseUrl} is not answering${probe.detail ? ` (${probe.detail})` : ""}. Start it with \`hermes proxy start\`.`,
+          action: { label: "Open Settings", target: "settings" },
+        };
+      }
+
+      // Answering but refusing the request means the process is up and its upstream
+      // credential is the problem — a different fix from "start the proxy".
+      if (probe.statusCode !== undefined && probe.statusCode >= 400) {
+        return {
+          key: `gateway:${connection.id}`,
+          label: `${name} endpoint`,
+          status: "warn",
+          detail: `${baseUrl} is running but rejected the request (${probe.statusCode}). Log the upstream provider back in.`,
+          action: { label: "Open Settings", target: "settings" },
+        };
+      }
+
+      return {
+        key: `gateway:${connection.id}`,
+        label: `${name} endpoint`,
+        status: "ok",
+        detail: `${baseUrl} is answering.`,
+      };
+    }),
+  );
 }
 
 async function resolveBinary(command: string): Promise<string | null> {
