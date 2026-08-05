@@ -13,6 +13,7 @@ import {
   stepKindMeta,
   stepKinds,
   triggerMeta,
+  triggerTypes,
   unsupportedTriggerCopy,
 } from "../src/renderer/workflows/workflow-ui.ts";
 import { workflowSeeds } from "../src/main/workflows/workflow-seeds.ts";
@@ -96,8 +97,16 @@ test("scheduled seeds carry a schedule the parser can use", () => {
     if (seed.trigger.type !== "schedule") continue;
     assert.ok(seed.trigger.schedule?.trim(), `seed ${seed.id} is scheduled but has no schedule string`);
   }
-  // `git-push` joined when the ref-poll runner landed, and `webhook` when the
-  // loopback listener did. `issue-created` is the last one out: it needs provider
-  // credentials and outbound polling, not a port.
-  assert.deepEqual(locallyRunnableTriggerTypes, ["manual", "schedule", "file-change", "git-push", "webhook"]);
+  // Every declared trigger now has a local runner: schedules and file watching,
+  // ref polling, a loopback webhook listener, and issue polling through the user's
+  // own `gh`. Nothing in the editor is gated any more.
+  assert.deepEqual(locallyRunnableTriggerTypes, [
+    "manual",
+    "schedule",
+    "file-change",
+    "git-push",
+    "webhook",
+    "issue-created",
+  ]);
+  assert.deepEqual(triggerTypes.filter((type) => !isLocallyRunnableTrigger(type)), [], "no trigger is gated");
 });

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { WebContents } from "electron";
 import type { WorkflowDefinition, WorkflowEvent } from "@contracts";
 import { git } from "../git/git-service";
+import { type IssueSummary, gh, listOpenIssues, parseIssueTrigger } from "./issue-poller";
 import type { WorkflowService } from "./workflow-service";
 import { parseSchedule, previousOccurrence } from "./workflow-schedule";
 
@@ -36,6 +37,14 @@ const REF_CHANGE_COOLDOWN_MS = 90_000;
 const WEBHOOK_DEBOUNCE_MS = 2_000;
 
 /**
+ * Quiet period between issue-triggered runs of the same workflow.
+ *
+ * A burst of issues filed at once (a triage session, an importer) should start the
+ * workflow, not start it once per issue.
+ */
+const ISSUE_COOLDOWN_MS = 60_000;
+
+/**
  * Fires locally runnable workflow triggers: friendly schedules and project file
  * changes. GitHub/Jira/webhook triggers remain disabled in the editor until the
  * app has real integrations listening for them; this service deliberately does not
@@ -64,13 +73,27 @@ export class WorkflowSchedulerService {
   private readonly lastRefRunFor = new Map<string, number>();
   /** Workflow id -> last accepted webhook run time, for delivery retries. */
   private readonly lastWebhookFor = new Map<string, number>();
+  /** Guards the issue poll, which shells out to `gh` over the network. */
+  private issuePolling = false;
+  /** Project root -> issue numbers already seen. Seeded, never fired on, at boot. */
+  private readonly seenIssues = new Map<string, Set<number>>();
+  /** Workflow id -> last accepted issue-triggered run time. */
+  private readonly lastIssueRunFor = new Map<string, number>();
 
   constructor(
     private readonly workflows: WorkflowService,
     private readonly webContentsProvider: () => WebContents | null,
     /** Injection seam for tests: runs one git command in `cwd`. */
     private readonly runGit: (cwd: string, args: string[]) => Promise<{ ok: boolean; output: string }> = git,
+    /** Injection seam for tests: runs one `gh` command in `cwd`. */
+    private readonly runGh: (cwd: string, args: string[]) => Promise<{ ok: boolean; output: string }> = gh,
   ) {}
+
+  /** Open issues for `root`, optionally narrowed to a label. Null means "cannot tell". */
+  private listIssues(root: string, label?: string): Promise<IssueSummary[] | null> {
+    if (!label) return listOpenIssues(root, this.runGh);
+    return listOpenIssues(root, (cwd, args) => this.runGh(cwd, [...args, "--label", label]));
+  }
 
   start(options: SchedulerOptions = {}): void {
     if (this.timer) return;
@@ -79,10 +102,13 @@ export class WorkflowSchedulerService {
     // Seed ref SHAs before the first tick: without this, every ref-change workflow
     // fires once on launch simply because the app had never seen its HEAD before.
     void this.seedRefBaselines();
+    // Same reason: without a baseline every issue already open would look new.
+    void this.seedIssueBaselines();
     const intervalMs = Math.max(15_000, options.intervalMs ?? 60_000);
     this.timer = setInterval(() => {
       void this.runDueWorkflows();
       void this.runRefChangeWorkflows();
+      void this.runIssueWorkflows();
       this.refreshFileWatchers();
       void options.onSync?.();
     }, intervalMs);
@@ -303,6 +329,98 @@ export class WorkflowSchedulerService {
           Boolean(workflow.trigger.detail?.trim()) &&
           workflow.steps.some((step) => step.enabled),
       );
+  }
+
+  /**
+   * Runs every active `issue-created` workflow for issues opened since last poll.
+   *
+   * Same discipline as the ref trigger: issues seen on the first poll are recorded
+   * as the baseline and never fired on, so launching the app does not run a
+   * workflow once for every issue already open in the repo.
+   */
+  async runIssueWorkflows(now = new Date()): Promise<string[]> {
+    if (this.issuePolling) return [];
+    this.issuePolling = true;
+    const fired: string[] = [];
+
+    try {
+      // One `gh` call per repo, not per workflow: several workflows commonly watch
+      // the same project and each poll is a network round-trip.
+      const byRoot = new Map<string, WorkflowDefinition[]>();
+      for (const workflow of this.workflows.list()) {
+        const { status, trigger, steps, projectPath } = workflow;
+        if (status !== "active" || trigger.type !== "issue-created" || !projectPath) continue;
+        if (!steps.some((step) => step.enabled)) continue;
+        const root = path.resolve(projectPath);
+        byRoot.set(root, [...(byRoot.get(root) ?? []), workflow]);
+      }
+
+      for (const [root, workflows] of byRoot) {
+        const issues = await this.listIssues(root);
+        // null means "cannot tell" (no gh, logged out, not a GitHub repo). Recording
+        // a baseline from that would make every issue look new once gh starts working.
+        if (issues === null) continue;
+
+        const seen = this.seenIssues.get(root);
+        if (!seen) {
+          this.seenIssues.set(root, new Set(issues.map((issue) => issue.number)));
+          continue;
+        }
+
+        const fresh = issues.filter((issue) => !seen.has(issue.number));
+        for (const issue of issues) seen.add(issue.number);
+        if (fresh.length === 0) continue;
+
+        for (const workflow of workflows) {
+          const { label } = parseIssueTrigger(workflow.trigger.detail);
+          // A label filter needs a second call per issue, so it is only paid for
+          // when the user actually asked for one.
+          const matching = label ? await this.filterByLabel(root, fresh, label) : fresh;
+          if (matching.length === 0) continue;
+
+          const lastRun = this.lastIssueRunFor.get(workflow.id);
+          if (lastRun !== undefined && now.getTime() - lastRun < ISSUE_COOLDOWN_MS) continue;
+          this.lastIssueRunFor.set(workflow.id, now.getTime());
+
+          const headline = matching[0];
+          const extra = matching.length > 1 ? ` (+${matching.length - 1} more)` : "";
+          this.emit(workflow, `🐛 Issue #${headline.number} opened: ${headline.title}${extra}`);
+
+          try {
+            await this.workflows.run({ workflowId: workflow.id, triggeredBy: "issue-created" });
+            fired.push(workflow.id);
+          } catch (error) {
+            this.emitFailure(workflow, error, "Issue run");
+          }
+        }
+      }
+    } finally {
+      this.issuePolling = false;
+    }
+
+    return fired;
+  }
+
+  /** Records currently-open issues without firing, so only later ones count as new. */
+  async seedIssueBaselines(): Promise<void> {
+    for (const workflow of this.workflows.list()) {
+      const { status, trigger, steps, projectPath } = workflow;
+      if (status !== "active" || trigger.type !== "issue-created" || !projectPath) continue;
+      if (!steps.some((step) => step.enabled)) continue;
+
+      const root = path.resolve(projectPath);
+      if (this.seenIssues.has(root)) continue;
+      const issues = await this.listIssues(root);
+      if (issues) this.seenIssues.set(root, new Set(issues.map((issue) => issue.number)));
+    }
+  }
+
+  /** Issues carrying `label`, filtered one call at a time. */
+  private async filterByLabel(root: string, issues: IssueSummary[], label: string): Promise<IssueSummary[]> {
+    const labelled = await this.listIssues(root, label);
+    if (labelled === null) return [];
+    const allowed = new Set(labelled.map((issue) => issue.number));
+    return issues.filter((issue) => allowed.has(issue.number));
   }
 
   /** The scheduled moment this workflow owes a run for, or null when it is current. */

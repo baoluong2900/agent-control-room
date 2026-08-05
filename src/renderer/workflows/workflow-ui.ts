@@ -60,11 +60,15 @@ export const locallyRunnableTriggerTypes: WorkflowTriggerType[] = [
   "file-change",
   "git-push",
   "webhook",
+  "issue-created",
 ];
 
-export const unsupportedTriggerCopy: Partial<Record<WorkflowTriggerType, string>> = {
-  "issue-created": "Issue-created needs a tracker integration before it can run locally.",
-};
+/**
+ * Every trigger now has a local runner, so nothing is gated. The map stays because
+ * it is the right place for the next trigger that cannot run, and a test asserts
+ * that anything not locally runnable carries an explanation.
+ */
+export const unsupportedTriggerCopy: Partial<Record<WorkflowTriggerType, string>> = {};
 
 /** Explains what `trigger.detail` does, per trigger type, in the editor. */
 export const triggerDetailHelp: Partial<Record<WorkflowTriggerType, string>> = {
@@ -73,6 +77,8 @@ export const triggerDetailHelp: Partial<Record<WorkflowTriggerType, string>> = {
     "Empty polls HEAD. A branch name (main) watches that branch; origin/main watches the remote-tracking ref, which is the closest local signal for “was pushed”.",
   webhook:
     "The hook name to listen on, e.g. deploy → POST /hooks/deploy. The listener binds 127.0.0.1 only and requires the token shown below; reach it from outside with a tunnel such as `ssh -R` or cloudflared.",
+  "issue-created":
+    "Polls GitHub through your own `gh` CLI, so it needs gh installed and logged in. Empty watches every new issue; a label name (bug) watches only issues carrying it.",
 };
 
 export function isLocallyRunnableTrigger(type: WorkflowTriggerType): boolean {
