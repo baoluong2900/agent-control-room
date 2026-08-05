@@ -68,7 +68,12 @@ export interface AgenticDesktopApi {
     saveProviderConnection: (input: ProviderConnectionInput) => Promise<ProviderConnection>;
     deleteProviderConnection: (id: string) => Promise<void>;
     verifyProviderConnection: (id: string) => Promise<ProviderConnectionVerifyResult>;
-    openProviderAuth: (input: ProviderConnectionAuthRequest) => Promise<ProviderConnectionAuthResult>;
+    /**
+     * Opens the provider's own site in the user's browser so they can copy a
+     * credential out. Deliberately not called `openProviderAuth`: no OAuth
+     * callback, device-code exchange, or token refresh happens here.
+     */
+    openProviderSite: (input: ProviderConnectionAuthRequest) => Promise<ProviderConnectionAuthResult>;
   };
   agents: {
     catalog: () => Promise<AgentCliDescriptor[]>;

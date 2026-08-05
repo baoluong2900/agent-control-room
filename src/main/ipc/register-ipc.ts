@@ -75,8 +75,8 @@ export function registerIpcHandlers({
   ipcMain.handle("settings:verify-provider-connection", (_event, id: string) =>
     settingsService.verifyProviderConnection(id),
   );
-  ipcMain.handle("settings:open-provider-auth", (_event, input: ProviderConnectionAuthRequest) =>
-    settingsService.openProviderAuth(input),
+  ipcMain.handle("settings:open-provider-site", (_event, input: ProviderConnectionAuthRequest) =>
+    settingsService.openProviderSite(input),
   );
 
   ipcMain.handle("agent:catalog", () => listAgentCatalog());

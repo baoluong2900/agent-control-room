@@ -198,7 +198,7 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
       // A gateway provider is a local process the user already runs, so opening
       // a browser page for it would be noise rather than part of the flow.
       if (entry.authMode !== "api-key" && provider !== "hermes-agent") {
-        const result = await window.agentic.settings.openProviderAuth({ provider });
+        const result = await window.agentic.settings.openProviderSite({ provider });
         if (!result.opened) {
           throw new Error(`Could not open ${entry.label}.`);
         }
@@ -208,21 +208,25 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
         provider,
         authMode: entry.authMode,
         accountLabel,
-        // A gateway is only usable once its endpoint answers, so it starts
-        // unchecked and the Verify button is what promotes it.
-        status: provider === "hermes-agent" ? "unverified" : "connected",
+        // Never claim `connected` here. Saving a credential proves nothing about
+        // whether it works; `verifyProviderConnection` below is the only path to
+        // `connected`, and the database defaults a new row to `unverified`.
         tokenSecret: draft.apiKey.trim() || undefined,
         baseUrl: supportsBaseUrl(provider) ? draft.baseUrl.trim() : undefined,
         quotaLabel: requiresApiKey(provider) ? "API key" : undefined,
       });
 
-      setConnections((current) => [saved, ...current.filter((connection) => connection.id !== saved.id)]);
+      // Verify immediately so the user still gets a one-click flow and sees the
+      // real state rather than an optimistic one. A `cli-missing` result is useful
+      // information, not a failure of the save.
+      const verification = await window.agentic.settings.verifyProviderConnection(saved.id);
+      const verified = verification.connection;
+
+      setConnections((current) => [verified, ...current.filter((connection) => connection.id !== verified.id)]);
       updateDraft(provider, { accountLabel, apiKey: "" });
       showBanner(
-        provider === "hermes-agent"
-          ? `${entry.label} saved. Click Verify to check the proxy is answering.`
-          : `${entry.label} connected locally.`,
-        "success",
+        `${entry.label}: ${verification.detail}`,
+        verification.outcome === "verified" ? "success" : "idle",
       );
     } catch (nextError) {
       setError(formatError(nextError));
@@ -237,7 +241,7 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
     try {
       const entry = getProviderCatalogEntry(connection.provider);
       if (entry.authMode !== "api-key" && connection.provider !== "hermes-agent") {
-        const result = await window.agentic.settings.openProviderAuth({ provider: connection.provider });
+        const result = await window.agentic.settings.openProviderSite({ provider: connection.provider });
         if (!result.opened) {
           throw new Error(`Could not open ${entry.label}.`);
         }
@@ -248,13 +252,20 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
         provider: connection.provider,
         authMode: connection.authMode,
         accountLabel: connection.accountLabel,
-        status: "connected",
+        // Same rule as Connect: reconnecting is an intent, not evidence. Omitting
+        // status keeps the stored one until verification moves it.
         baseUrl: connection.baseUrl,
         quotaLabel: connection.quotaLabel,
       });
 
-      setConnections((current) => current.map((item) => (item.id === saved.id ? saved : item)));
-      showBanner(`${entry.label} reconnected.`, "success");
+      const verification = await window.agentic.settings.verifyProviderConnection(saved.id);
+      const verified = verification.connection;
+
+      setConnections((current) => current.map((item) => (item.id === verified.id ? verified : item)));
+      showBanner(
+        `${entry.label}: ${verification.detail}`,
+        verification.outcome === "verified" ? "success" : "idle",
+      );
     } catch (nextError) {
       setError(formatError(nextError));
     } finally {

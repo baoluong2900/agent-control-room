@@ -377,14 +377,14 @@ test("provider auth opens a known console url and reports unsupported providers"
   const linkOpener = createLinkOpener();
   const service = new SettingsService(db, new ProviderSecretVault(dir, createStorage()), linkOpener);
 
-  const opened = await service.openProviderAuth({ provider: "openai-codex" });
+  const opened = await service.openProviderSite({ provider: "openai-codex" });
   assert.deepEqual(opened, {
     provider: "openai-codex",
     opened: true,
     url: "https://platform.openai.com/",
   });
 
-  const unsupported = await service.openProviderAuth({ provider: "custom-api" });
+  const unsupported = await service.openProviderSite({ provider: "custom-api" });
   assert.deepEqual(unsupported, { provider: "custom-api", opened: false });
   assert.deepEqual(linkOpener.opened, ["https://platform.openai.com/"], "no browser for api-key providers");
 

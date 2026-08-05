@@ -136,7 +136,15 @@ export class SettingsService {
     this.database.deleteProviderConnection(id);
   }
 
-  async openProviderAuth(input: ProviderConnectionAuthRequest): Promise<ProviderConnectionAuthResult> {
+  /**
+   * Opens the provider's own site in the user's browser.
+   *
+   * Named for what it does. There is no OAuth callback listener, no device-code
+   * exchange, and no token refresh here — the user copies a credential out of that
+   * page and pastes it back, which is why `ProviderConnectionAuthResult` only
+   * reports whether a page was opened.
+   */
+  async openProviderSite(input: ProviderConnectionAuthRequest): Promise<ProviderConnectionAuthResult> {
     const url = providerAuthUrls[input.provider];
     if (!url) {
       return {
