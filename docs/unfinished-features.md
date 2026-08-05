@@ -15,13 +15,13 @@ Cập nhật bổ sung cùng ngày: các kế hoạch triển khai chi tiết đ
 
 | Mức | Khu vực | Vấn đề chính | Hướng xử lý ngắn |
 | --- | --- | --- | --- |
-| P0 residual | Workflows | Unsupported remote triggers are gated/warned; `file-change` has a local runner, but true remote `git-push`, `issue-created`, and `webhook` automation still need architecture. | Keep remote triggers disabled/warned until adding ref polling/API polling/local webhook service. |
-| P0 residual | Provider connections | Local verification is wired and Connect no longer self-claims `connected`; OAuth/device remains open-external/manual, not token exchange. | Keep copy honest or implement callback/device-code auth as a separate feature. |
+| Residual | Workflows | `file-change` and `git-push` (local ref polling) both run; only `issue-created` and `webhook` remain, and both need inbound HTTP or provider credentials the app does not have. Wants architecture. | Keep remote triggers disabled/warned until adding ref polling/API polling/local webhook service. |
+| Residual | Provider connections | Fixed properly 2026-08-06: two renderer call sites still hardcoded `connected` despite this being marked done. Both now verify instead. Real OAuth stays a separate plan. | Keep copy honest or implement callback/device-code auth as a separate feature. |
 | Done | Knowledge | Incremental scan, AST parsing, tsconfig alias resolution, progress/cancel, and ranked search all landed 2026-08-06. | Nothing open; see `docs/feature/done/knowledge-index.md`. |
 | P1 residual | Git | Patch viewer, log, stage/unstage, and commit now exist; branch/push/pull/stash/blame/conflict tooling remains future work. | Keep expanding operations by reversibility: stash/log details next, push only with explicit outbound confirmation. |
 | Done | Tasks | Planner now assigns only installed CLIs, labels itself a template plan, and has an opt-in AI mode with stated fallback. | Nothing open; see `docs/feature/done/task-ai-planner.md`. |
 | P2 residual | Agents | Restart, concurrency queue, and SIGTERM→SIGKILL/tree-kill escalation all landed; only pause/resume remains out of scope. | Keep pause only for CLIs with an explicit application-level checkpoint capability. |
-| P2 | AI gateway docs | `docs/aiagnet.md` mô tả 9Router/CLIProxyAPI sidecar, nhưng runtime/package hiện chưa có router process hoặc `/v1` endpoint. | Gắn nhãn tài liệu này là proposal, hoặc implement gateway sidecar thật. |
+| Residual | AI gateway | Doc labelled as proposal, and Diagnostics now live-probes a gateway the user runs. App still does not spawn a sidecar or expose `/v1` — that needs a product decision. | Gắn nhãn tài liệu này là proposal, hoặc implement gateway sidecar thật. |
 
 ## Đã sửa (2026-08-04): workflow step ↔ agent connection
 
@@ -37,7 +37,22 @@ Test: `tests/workflow-agent-binding.test.ts`. Migration cho DB cũ: version 4 v�
 
 ## 1. Workflows: unsupported remote triggers are gated; local triggers run
 
-### W1 — Remote triggers still need runners, but UI no longer promises them silently
+### W1 — Đã sửa phần lớn (2026-08-06): `git-push` giờ có runner thật
+
+`WorkflowSchedulerService` poll local ref bằng `git rev-parse` (tái dùng `git()` từ
+`git-service`). Phát hiện là **ref đã đổi** — commit/merge/rebase/pull — nên label
+đổi thành *On Ref Change*; gọi "On Push" là hứa thứ cần webhook. `detail` =
+`origin/main` thì watch remote-tracking ref, tín hiệu local gần nhất với "đã push".
+
+Baseline được seed lúc `start()` nên mở app không fire hàng loạt; cooldown 90s chặn
+workflow tự commit rồi tự trigger; SHA ghi trước khi run nên run fail không retry mãi
+cùng commit. Test `tests/workflow-ref-trigger.test.ts` (11 case), cộng verify trên
+repo git thật.
+
+Còn lại: `webhook` cần process listen port (xem R1), `issue-created` cần credential
+provider dùng được. Cả hai vẫn gated đúng.
+
+Evidence (lịch sử):
 
 Status update 2026-08-04:
 
@@ -93,7 +108,23 @@ Việc nên làm:
 1. Nếu muốn giữ scope nhỏ: đổi wording thành “Open provider login/docs” và chỉ coi connection là local metadata/manual secret.
 2. Nếu muốn đúng nghĩa OAuth/device: thêm callback URL/deep link hoặc device-code polling, token exchange, refresh/expiry handling, và trạng thái expired tự động.
 
-### S2 — Provider verification local đã có và Connect không còn tự nhận connected
+### S2 — Đã sửa thật (2026-08-06); trước đó bị đánh dấu xong nhầm
+
+Mục này từng ghi là xong, nhưng `connectProvider` và `reconnectProvider` trong
+`SettingsModule.tsx` **vẫn truyền `status: "connected"`**. Vì
+`saveProviderConnection` resolve `input.status ?? existing ?? "unverified"`, giá trị
+renderer truyền thắng default — card xanh ngay khi lưu credential, đúng hành vi plan
+02 được viết ra để sửa.
+
+Nguyên nhân sống sót: backend test có pin default `unverified`, nhưng không test nào
+pin việc renderer override nó. Giờ cả hai handler không truyền status và verify ngay
+sau khi save, nên luồng vẫn một click nhưng trạng thái là thật.
+
+`tests/provider-connection-honesty.test.ts` assert trên source text — bug là một
+*claim*, không phải phép tính, nên test hành vi sẽ phải dựng cả module để bắt một
+string literal.
+
+Evidence (lịch sử):
 
 Status update 2026-08-04:
 
@@ -325,7 +356,19 @@ Status update 2026-08-04: terminal log storage now has per-message truncation wi
 
 ## 7. AI gateway / router: tài liệu kiến trúc đã mô tả nhiều hơn runtime hiện tại
 
-### R1 — 9Router/CLIProxyAPI sidecar mới là proposal, chưa được đóng gói hoặc chạy trong app
+### R1 — Vẫn đúng, nhưng Diagnostics giờ báo được gateway health
+
+App vẫn **không** spawn sidecar và không expose `/v1` — grep `createServer` /
+`.listen(` trong `src/main` vẫn không có hit thật. Điều đó cần quyết định sản phẩm
+(firewall prompt, chọn port, local API key, CORS, bundle binary hay không).
+
+Đã làm được phần không cần quyết định: `collectGatewayChecks` live-probe `baseUrl`
+của connection `hermes-agent` và là check **live duy nhất** trong Diagnostics — các
+provider check khác đọc stored state, thứ không trả lời được "proxy có đang chạy".
+Ba outcome: không reachable → `fail` kèm `hermes proxy start`; 4xx → `warn` chỉ vào
+credential upstream; answer → `ok`. Test `tests/diagnostics-gateway.test.ts`.
+
+Evidence (lịch sử):
 
 Evidence:
 

@@ -132,6 +132,52 @@ Phần server nên có test riêng, không chạy Electron UI trừ khi cần. N
       (grep `\/v1|9Router|gateway|sidecar` trong README: 0 hit.)
 - [x] `docs/feature/README.md` link plan này với effort XL và P3.
 
+## Phase 2 đã implement (2026-08-06)
+
+Phase 2 ("Diagnostics đọc health và báo sidecar status") làm được **ngay** mà không
+cần phần sidecar mà plan này defer. Endpoint probe đã tồn tại sẵn cho provider
+verification; Diagnostics chỉ đơn giản là chưa gọi nó, nên một proxy đã chết vẫn
+hiện thành row `connected` màu xanh.
+
+`collectGatewayChecks` (`src/main/ipc/diagnostics.ts`) probe `baseUrl` của mỗi
+connection `hermes-agent`, và **là check live duy nhất** trong Diagnostics. Mọi
+provider check khác đọc stored verification state, thứ không thể trả lời "proxy có
+đang chạy không" — gateway là process user tự start/stop ngoài app, nên một row
+verify từ một giờ trước không nói gì về hiện tại.
+
+Ba outcome thay vì hai, vì cần lời khuyên khác nhau:
+
+| Kết quả | Status | Lý do |
+| --- | --- | --- |
+| Không reachable | `fail` | Nêu `hermes proxy start`, vì fix không nằm trong Settings |
+| Answer nhưng 4xx | `warn` | Process đang chạy, nên bảo "start proxy" là sai; vấn đề là credential upstream |
+| Answer | `ok` | Không cần call to action |
+
+Connection không phải gateway, hoặc không có `baseUrl`, bị skip **không tốn network
+call** — đó cũng là thứ giữ cho `tests/diagnostics.test.ts` chạy offline. Probe
+injectable nên test mới không bao giờ chạm mạng.
+
+Test: `tests/diagnostics-gateway.test.ts` (6 case), gồm một case pin rằng stored
+`connected` không được che một endpoint đã chết.
+
+## Vì sao phase 1, 3, 4, 5 vẫn chưa làm
+
+Không phải nợ kỹ thuật bị bỏ quên — chúng cần quyết định sản phẩm:
+
+- **Phase 1/3 (sidecar + `/v1`)**: sẽ là process **đầu tiên trong app mở port**.
+  Kéo theo firewall prompt, chọn port, local API key, CORS, và quyết định bundle
+  binary hay yêu cầu user tự cài.
+- **Phase 4 (multi-account OAuth)**: cần đúng những thứ `provider-connection-truth.md`
+  đã cố ý loại khỏi scope.
+- **Phase 5 (routing/fallback)**: là một sản phẩm riêng — cần UX rõ trước, và có câu
+  hỏi bảo mật thật: fallback sang provider khác nghĩa là dữ liệu rời máy tới vendor
+  khác, nên cần approval của user hay không?
+
+Vị trí trung thực hiện tại: app **trỏ được** tới gateway do user chạy, và báo đúng
+sự thật nó có answer hay không. Verify 2026-08-06: `defaultEndpointProbe` với
+`http://127.0.0.1:8645/v1` trả `{reachable:false}` khi chưa `hermes proxy start` —
+tức đường "trỏ tới router" đã chạy thật, chỉ chưa tự spawn.
+
 Re-verify runtime 2026-08-06: grep `createServer` / `.listen(` / `express` /
 `fastify` trong `src/main` và `src/preload` vẫn không có hit thật — app vẫn là
 local CLI orchestrator, không mở port nào. Hit duy nhất liên quan là một comment

@@ -1,6 +1,10 @@
 # 02 — Provider connection: đừng tự nhận "connected" khi chưa check
 
-**Trạng thái: Done/P0 residual · Mức cũ: P0 · Effort: S · Loại: UI nói sai trạng thái**
+**Trạng thái: Done (residual: OAuth thật là plan riêng) · Mức cũ: P0 · Effort: S**
+
+Cập nhật 2026-08-06: acceptance "không còn hardcode `status: connected`" trước đây
+bị đánh dấu xong **sai** — vẫn còn 2 chỗ trong renderer. Đã sửa thật, kèm test
+chống hồi quy. Phase 4 (đổi tên `openProviderAuth` → `openProviderSite`) cũng xong.
 
 Implemented 2026-08-04: new provider rows default to `unverified`, Connect/Reconnect no longer hardcode `connected`, verification is wired through IPC, renderer cards expose unverified/verified details, and Kiro verification no longer depends on the lossy provider→CLI inversion. Remaining residual: OAuth/device is still a manual/open-external flow, not a full callback/device-token exchange.
 
@@ -70,4 +74,30 @@ Mở rộng `tests/settings-service.test.ts`:
 - [x] Provider chưa từng verify hiện pill `Unverified` có style.
 - [x] Integrations page hiện cùng trạng thái đó, không có state nào không được style.
 - [x] Không còn chỗ renderer connect/reconnect tự hardcode `status: "connected"`.
+      (2026-08-06: thực tế vẫn còn 2 chỗ tới lúc đó — `connectProvider` và
+      `reconnectProvider`. `saveProviderConnection` resolve status là
+      `input.status ?? existing ?? "unverified"`, nên giá trị renderer truyền
+      **thắng** default. Giờ cả hai không truyền status và verify ngay sau save.)
 - [x] `npm run typecheck` và settings tests xanh.
+
+## Đã implement (2026-08-06)
+
+Tại sao acceptance này từng bị đánh dấu xong nhầm: backend test có pin default là
+`unverified`, nhưng **không có test nào** pin việc renderer override nó. Bug là một
+*claim* trong renderer, không phải phép tính trong service.
+
+`tests/provider-connection-honesty.test.ts` vì thế assert trên source text —
+behavioural test sẽ phải dựng cả settings module để bắt một string literal. Nó pin:
+không còn literal `status: "connected"`, cả Connect và Reconnect đều verify, không
+surface nào còn `openProviderAuth`, và tên channel ở preload khớp ipcMain (lệch chỗ
+này typecheck vẫn xanh, chỉ fail lúc runtime).
+
+Phase 4 đã xong: `openProviderAuth` → `openProviderSite` ở cả 4 chỗ cộng channel
+name. Hàm chỉ mở trang provider để user tự copy credential — không callback
+listener, không device-code exchange, không refresh — nên tên cũ hứa một flow không
+tồn tại.
+
+**OAuth thật vẫn ngoài scope, có chủ ý.** Nó cần protocol handler hoặc loopback
+listener, PKCE + `state`, token exchange, refresh trước khi hết hạn, và đổi contract
+để chở token. Plan này đã nói rõ đừng nhét vào đây; thêm nữa, loopback listener sẽ
+là thứ **đầu tiên trong app mở port**.

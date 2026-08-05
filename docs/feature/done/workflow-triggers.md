@@ -1,6 +1,10 @@
 # 01 — Workflow triggers: chỉ `schedule` chạy được, 4 loại còn lại là nhãn trống
 
-**Trạng thái: Done/P0 residual · Mức cũ: P0 · Effort: M · Loại: UI hứa nhiều hơn runtime**
+**Trạng thái: Done (residual: webhook/issue-created) · Mức cũ: P0 · Effort: M**
+
+Cập nhật 2026-08-06: phase 3 (`git-push`) đã implement bằng local ref polling.
+Còn lại `webhook` và `issue-created` — cả hai cần thứ app không có (inbound HTTP,
+credential provider), nên vẫn gated đúng như phase 4 đề xuất.
 
 Implemented 2026-08-04: unsupported remote triggers are gated in the editor/UI, saved unsupported triggers carry warnings instead of silently promising automation, and the local `file-change` runner is implemented with debounce/ignore-loop protection. Residual future work: true remote `git-push`, `issue-created`, and `webhook` runners still need separate architecture decisions.
 
@@ -87,6 +91,36 @@ Cả hai đòi hỏi thứ app hiện **không có**: một cách nhận thông 
 
 Đề xuất: **giữ cả hai disabled** cho tới khi có quyết định sản phẩm. Chúng ở lại phase 1 (disabled + nhãn rõ) là trạng thái đúng, không phải nợ kỹ thuật cần trả gấp.
 
+## Đã implement phase 3 (2026-08-06)
+
+Runner nằm trong `WorkflowSchedulerService` cạnh file-change, đúng "runner shape"
+plan yêu cầu, và tái dùng `git()` đã export từ `git-service` thay vì viết helper
+git thứ hai với timeout khác.
+
+Đúng như plan cảnh báo về đặt tên: cái được phát hiện là **ref đã thay đổi**
+(commit/merge/rebase/pull), không phải push. Nên label đổi thành **On Ref Change**;
+gọi "On Push" là hứa thứ cần webhook mới làm được. `detail` = `origin/main` thì
+watch `refs/remotes/origin/main` — tín hiệu local gần nhất với "đã push".
+
+`parseRefTrigger` nhận những gì user thật sự gõ, vì `detail` là free text: `main`,
+`origin/main`, hoặc `branch=main, remote=origin`. Rác thì degrade về watch HEAD.
+
+Bốn failure mode quyết định thiết kế:
+
+| Vấn đề | Xử lý |
+| --- | --- |
+| Fire toàn bộ lúc mở app | Ref chưa thấy thì **ghi lại, không fire**. `start()` seed trước tick đầu; `seedRefBaselines()` test riêng được |
+| Workflow tự commit → loop vô hạn | Cooldown 90s, dài hơn poll interval |
+| Run fail rồi retry mãi cùng commit | SHA được ghi **trước** khi attempt run |
+| `rev-parse` echo input khi ref không tồn tại | Validate output là hex object id; ref/repo không hợp lệ thì im lặng |
+
+Bug thật tìm ra lúc test: cooldown dùng `?? 0` cho "chưa từng chạy", tức so với
+epoch, nên block cả lần chạy đầu khi `now` nhỏ. Đã sửa thành phân biệt `undefined`
+với `0`.
+
+Test: `tests/workflow-ref-trigger.test.ts` (11 case). Hai assertion cũ trong
+`workflow-ui.test.ts` phải cập nhật vì chúng pin label cũ và list runnable cũ.
+
 ## Test
 
 | File | Case |
@@ -107,5 +141,9 @@ Test watcher cần thư mục tạm thật và có yếu tố thời gian. Cho p
 - [x] Sửa một file trong project → workflow `file-change` fire đúng một lần sau debounce.
 - [x] Generated/ignored dirs không fire watcher.
 - [x] Workflow `file-change` mà step của nó ghi file → không loop.
-- [ ] Remote/ref trigger thực sự (`git-push`/ref-change) vẫn là future work.
+- [x] Remote/ref trigger thực sự (`git-push`/ref-change) đã có: local ref polling qua
+      `git rev-parse`, seed baseline lúc start, cooldown 90s chống self-retrigger.
+      Verify trên repo git thật: seed không fire, commit thật fire 1 lần, commit trong
+      cooldown bị bỏ qua, hết cooldown fire lại, non-repo im lặng.
+- [ ] `webhook` / `issue-created` vẫn là future work (cần server + credential).
 - [x] Trigger tests đã được đăng ký trong `test:workflows`, và `npm run typecheck` xanh.

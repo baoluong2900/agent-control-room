@@ -18,10 +18,13 @@ child đang bị kill ghi vào database đã close, gây `uncaughtException` lú
 Chi tiết trong `done/agent-lifecycle.md`.
 
 Pass **2026-08-06 (tiếp)**: plan 05 (knowledge index, 5 phase) và plan 11 (task
-planner, 3 phase) đã hoàn thành và chuyển sang `done/`; acceptance ngắn hạn của plan
-15 đã verify đạt. Backlog mở còn lại chỉ là residual của 01/02 (remote trigger
-runners, OAuth/device thật) và phase 1+ của 15. `npm test` 256/256, `npm run build`
-pass.
+planner, 3 phase) hoàn thành.
+
+Pass **2026-08-06 (cuối)**: plan 01 (ref-change runner) và plan 02 (bỏ optimistic
+`connected` + rename `openProviderSite`) hoàn thành và chuyển sang `done/`; plan 15
+phase 2 (gateway health trong Diagnostics) cũng landed. Backlog mở còn lại **chỉ là
+những mục cần quyết định sản phẩm hoặc hạ tầng app chưa có**: `webhook`/`issue-created`
+runner, OAuth thật, và phase 1/3/4/5 của 15. `npm test` 277/277, `npm run build` pass.
 
 ## Cách đọc một file plan
 
@@ -42,9 +45,7 @@ Thứ tự này tính theo **giá trị / rủi ro**, không phải theo độ k
 
 | # | Plan | Mức | Effort | Vấn đề một dòng |
 | --- | --- | --- | --- | --- |
-| 01 | [workflow-triggers.md](workflow-triggers.md) | **Residual/P0** | M | Local file-change chạy được; remote `git-push`/issue/webhook runners vẫn chưa có |
-| 02 | [provider-connection-truth.md](provider-connection-truth.md) | **Residual/P0** | S | Local verification đã có; OAuth/device token flow thật vẫn chưa có |
-| 15 | [ai-gateway-sidecar.md](ai-gateway-sidecar.md) | P3 | XL | Acceptance ngắn hạn (dán nhãn proposal) đã xong; sidecar/`/v1` thật cần quyết định sản phẩm trước |
+| 15 | [ai-gateway-sidecar.md](ai-gateway-sidecar.md) | P3 | XL | Phase 0 + 2 (nhãn proposal, gateway health trong Diagnostics) đã xong; phase 1/3/4/5 cần quyết định sản phẩm |
 
 ## Completed archive
 
@@ -53,6 +54,8 @@ Các plan hoàn thành được chuyển sang [`done/`](done/README.md), để t
 
 | # | Plan | Trạng thái |
 | --- | --- | --- |
+| 01 | [Workflow triggers](done/workflow-triggers.md) | Done (webhook/issue residual) |
+| 02 | [Provider connection truth](done/provider-connection-truth.md) | Done (OAuth = plan riêng) |
 | 03 | [Workflow step profile binding](done/workflow-step-profile-binding.md) | Done |
 | 04 | [Git workspace MVP](done/git-workspace.md) | Done/MVP |
 | 06 | [Knowledge truncation report](done/knowledge-truncation-report.md) | Done |
@@ -71,7 +74,11 @@ Effort: S = dưới 1 ngày, M = 1–3 ngày, L = 1 tuần, XL = nhiều tuần 
 
 ## Thứ tự làm đề xuất
 
-**Sprint 1 — dừng chảy máu (UI đang nói dối).** Plan 03, 02, và phần gating của 01 đã xong: step binding không còn mất dữ liệu, provider không còn tự nhận connected trước verify, và trigger chưa hỗ trợ không còn được bán như automation thật. Residual của 01/02 là remote runners và OAuth/device token flow.
+**Sprint 1 — dừng chảy máu (UI đang nói dối).** Plan 03, 02, 01 đã xong. Trong pass
+2026-08-06, acceptance "không hardcode `status: connected`" của plan 02 hoá ra bị đánh
+dấu xong **sai** (vẫn còn 2 chỗ trong renderer) và đã được sửa thật kèm test chống hồi
+quy. Plan 01 giờ có ref-change runner thật; residual chỉ còn `webhook`/`issue-created`,
+cần inbound HTTP và credential provider.
 
 **Sprint 2 — làm cho panel dùng được hằng ngày.** Plan 04 (Git workspace MVP), 06 (truncation report), và 08 (log retention) đã xong. Git còn các operation nâng cao như stash/branch/push/conflict UX, nhưng patch/stage/commit path đã dùng được hằng ngày.
 
