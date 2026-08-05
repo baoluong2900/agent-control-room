@@ -32,6 +32,39 @@ test("knowledge graph caps never leave dangling edges and XML export strips inva
 });
 
 
+test("knowledge scan reports truncation caps and persists them", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentic-knowledge-truncation-"));
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "agentic-knowledge-truncation-db-"));
+
+  fs.writeFileSync(path.join(root, "a.png"), "image data", "utf8");
+  fs.writeFileSync(path.join(root, "b.ts"), "export const big = 1;".repeat(20_000), "utf8");
+  fs.writeFileSync(path.join(root, "c.ts"), `export const binary = "${String.fromCharCode(0)}";`, "utf8");
+  for (let index = 0; index < 24; index += 1) {
+    fs.writeFileSync(path.join(root, `small-${index.toString().padStart(2, "0")}.ts`), `export const value${index} = ${index};\n`, "utf8");
+  }
+
+  const db = await DesktopDatabase.open(userData);
+  const service = new KnowledgeService(db);
+  const snapshot = await service.scan({ projectPath: root, maxFiles: 20, maxFileBytes: 20_000 });
+
+  assert.equal(snapshot.truncation?.hitFileLimit, true);
+  assert.ok(snapshot.truncation && snapshot.truncation.filesSeen >= 27);
+  assert.equal(snapshot.truncation?.skippedUnsupported, 1);
+  assert.equal(snapshot.truncation?.skippedTooLarge, 1);
+  assert.equal(snapshot.truncation?.skippedBinary, 1);
+  assert.equal(snapshot.truncation?.filesIndexed, snapshot.indexedFiles);
+  assert.ok((snapshot.truncation?.graphNodesDropped ?? 0) >= 0);
+  assert.ok((snapshot.truncation?.largestSkipped?.[0]?.path ?? "").includes("b.ts"));
+
+  const stored = service.get(root);
+  assert.deepEqual(stored?.truncation, snapshot.truncation);
+
+  const xml = await service.export(root, "xml");
+  assert.match(xml.content, /<truncation /);
+
+  db.close();
+});
+
 test("knowledge service scans a project into a persistent codegraph and exports agent context", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentic-knowledge-project-"));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), "agentic-knowledge-db-"));

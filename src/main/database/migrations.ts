@@ -9,6 +9,12 @@ import { ensureColumns, type SqliteDatabase } from "./sqlite-types";
 export type Migration = {
   version: number;
   name: string;
+  /**
+   * Which tables the step touches. `workflow` steps are the only ones that can
+   * run against a workflow-only database (the in-memory harness the workflow
+   * tests use); everything else needs tables `DesktopDatabase` creates.
+   */
+  scope?: "app" | "workflow";
   up: (db: SqliteDatabase) => void;
 };
 
@@ -59,6 +65,7 @@ export const appMigrations: Migration[] = [
   {
     version: 4,
     name: "workflow-step-agent-binding",
+    scope: "workflow",
     up: (db) => {
       ensureColumns(db, "workflow_steps", [
         { name: "profile_id", ddl: "text" },
@@ -73,7 +80,71 @@ export const appMigrations: Migration[] = [
       ensureColumns(db, "provider_connections", [{ name: "base_url", ddl: "text" }]);
     },
   },
+  {
+    version: 6,
+    name: "task-retry-policy",
+    up: (db) => {
+      ensureColumns(db, "tasks", [
+        { name: "attempt_count", ddl: "integer not null default 0" },
+        { name: "max_attempts", ddl: "integer not null default 3" },
+        { name: "next_retry_at", ddl: "text" },
+        { name: "last_error", ddl: "text" },
+      ]);
+    },
+  },
+  {
+    version: 7,
+    name: "workflow-repository-legacy-columns",
+    scope: "workflow",
+    up: (db) => {
+      // These columns were added by `ensureColumns` inside
+      // `WorkflowRepository.migrate()` before this table existed, so a database
+      // from any earlier build may already have some, all, or none of them.
+      // `ensureColumns` is idempotent, which is what makes adopting them here
+      // safe: this version is the single source of truth from now on, and the
+      // repository only creates the baseline tables.
+      ensureColumns(db, "workflows", [
+        { name: "description", ddl: "text not null default ''" },
+        { name: "status", ddl: "text not null default 'draft'" },
+        { name: "favorite", ddl: "integer not null default 0" },
+        { name: "owner", ddl: "text not null default 'You'" },
+        { name: "project_path", ddl: "text" },
+        { name: "trigger_type", ddl: "text not null default 'manual'" },
+        { name: "trigger_schedule", ddl: "text" },
+        { name: "trigger_detail", ddl: "text" },
+        { name: "integrations", ddl: "text not null default '[]'" },
+        { name: "baseline_runs", ddl: "integer not null default 0" },
+        { name: "baseline_success_rate", ddl: "real not null default 0" },
+        { name: "baseline_avg_duration_ms", ddl: "integer not null default 0" },
+        { name: "baseline_last_run_at", ddl: "text" },
+        { name: "updated_at", ddl: "text" },
+      ]);
+
+      ensureColumns(db, "workflow_steps", [
+        { name: "name", ddl: "text not null default 'Step'" },
+        { name: "kind", ddl: "text not null default 'execute'" },
+        { name: "summary", ddl: "text not null default ''" },
+        { name: "model", ddl: "text not null default ''" },
+        // profile_id / provider_connection_id are owned by version 4 above and
+        // deliberately not repeated here.
+        { name: "shell_command", ddl: "text" },
+        { name: "timeout_seconds", ddl: "integer not null default 600" },
+        { name: "requires_approval", ddl: "integer not null default 0" },
+        { name: "continue_on_error", ddl: "integer not null default 0" },
+        { name: "enabled", ddl: "integer not null default 1" },
+      ]);
+    },
+  },
 ];
+
+/**
+ * The subset of `appMigrations` that only alters workflow tables, in version
+ * order. Used by `WorkflowRepository.bootstrap` so a workflow-only database gets
+ * the same columns without tripping over tables it never creates.
+ */
+export function workflowMigrations(migrations: Migration[] = appMigrations): Migration[] {
+  return migrations.filter((migration) => migration.scope === "workflow");
+}
 
 function ensureVersionTable(db: SqliteDatabase): void {
   db.exec(`

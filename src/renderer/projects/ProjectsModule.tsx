@@ -1,5 +1,11 @@
 import { Clock3, FolderOpen, GitBranch, History, RefreshCw, Terminal, X } from "lucide-react";
-import type { GitDiffSummary, ProjectSummary, SystemDiagnostics, AgentRunRecord } from "@contracts";
+import type {
+  AgentRunRecord,
+  DiagnosticAction,
+  GitDiffSummary,
+  ProjectSummary,
+  SystemDiagnostics,
+} from "@contracts";
 import type { ReactNode } from "react";
 import { DiagnosticsPanel } from "../components/DiagnosticsPanel";
 import { GitDiffPanel } from "../components/GitDiffPanel";
@@ -10,6 +16,7 @@ export function ProjectsModule({
   diagnostics,
   gitDiff,
   history,
+  onDiagnosticAction,
   onPickFolder,
   onRefreshGitDiff,
   onRemoveRecent,
@@ -20,6 +27,7 @@ export function ProjectsModule({
   diagnostics: SystemDiagnostics | null;
   gitDiff: GitDiffSummary | null;
   history: AgentRunRecord[];
+  onDiagnosticAction: (action: DiagnosticAction) => void;
   onPickFolder: () => Promise<string | null>;
   onRefreshGitDiff: () => Promise<void>;
   onRemoveRecent: (projectPath: string) => Promise<void>;
@@ -96,7 +104,7 @@ export function ProjectsModule({
         </section>
 
         <aside className="projects-side">
-          <DiagnosticsPanel diagnostics={diagnostics} />
+          <DiagnosticsPanel diagnostics={diagnostics} onAction={onDiagnosticAction} />
           <GitDiffPanel diff={gitDiff} project={project} onRefresh={onRefreshGitDiff} />
         </aside>
       </div>

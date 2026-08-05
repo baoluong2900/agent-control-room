@@ -1,27 +1,14 @@
 # 02 — Provider connection: đừng tự nhận "connected" khi chưa check
 
-**Mức: P0 · Effort: S · Loại: UI nói sai trạng thái**
+**Trạng thái: Done/P0 residual · Mức cũ: P0 · Effort: S · Loại: UI nói sai trạng thái**
+
+Implemented 2026-08-04: new provider rows default to `unverified`, Connect/Reconnect no longer hardcode `connected`, verification is wired through IPC, renderer cards expose unverified/verified details, and Kiro verification no longer depends on the lossy provider→CLI inversion. Remaining residual: OAuth/device is still a manual/open-external flow, not a full callback/device-token exchange.
 
 ## Trạng thái hiện tại
 
-Phần backend cho verification **đã có và khá cẩn thận**:
+Đã sửa phần trạng thái sai. Backend verification kiểm tra local readiness (credential trong vault + CLI provider trên PATH), IPC/preload/contract đã nối, DB default là `unverified`, và renderer không còn tự truyền `status: "connected"` khi Connect/Reconnect. Verify là đường đưa connection sang `connected`; khi thiếu CLI/credential, card hiển thị `disconnected` hoặc `unverified` kèm detail.
 
-- `src/main/settings/provider-verification.ts` kiểm tra hai fact local: credential có tồn tại trong vault, và CLI của provider có trên PATH. Header comment tại `:13-19` nói rõ chủ ý: app **không** gửi credential tới API provider để test.
-- Ba nhánh: thiếu credential → `missing-credential`/`disconnected` (`:49-55`); provider không map tới CLI nào → `verified` nếu có secret, ngược lại `unsupported` (`:57-67`); CLI thiếu → `cli-missing`/`disconnected` (`:69-78`); đủ cả → `verified`/`connected` (`:80-86`).
-- IPC đã nối trọn: `settings:verify-provider-connection` tại `src/main/ipc/register-ipc.ts:65-67` → `src/preload/preload.ts:39` → `src/contracts/ipc.ts:62`.
-- DB default đã đúng: `src/main/database/desktop-database.ts:294-296` dùng `input.status ?? existing?.status ?? "unverified"`, kèm comment "starts 'unverified' rather than claiming to be connected".
-- Save **không** verify, và chủ động invalidate verification cũ khi credential thay đổi (`src/main/settings/settings-service.ts:75-88`).
-
-Nhưng renderer bypass toàn bộ chuyện đó:
-
-- `src/renderer/settings/SettingsModule.tsx:177` truyền `status: "connected"` trong `connectProvider()`.
-- `SettingsModule.tsx:216` làm y hệt trong `reconnectProvider()`.
-
-Vì `input.status` thắng ở `desktop-database.ts:296`, và `:332` sau đó set `last_connected_at` vì `status === "connected"`, nên bấm Connect vẫn đánh dấu provider là connected với **zero verification**. Default `"unverified"` chỉ quan sát được qua API/test (`tests/settings-service.test.ts:272`), người dùng thật không bao giờ thấy.
-
-Một phần UI đang được làm dở (uncommitted): nút **Verify**, stat pill "Unverified", hiển thị `verificationDetail`, và `.status-unverified` CSS đã có trong working tree. Plan này tiếp nối phần đó chứ không làm lại.
-
-Còn về OAuth: `openProviderAuth()` tại `settings-service.ts:134-149` chỉ là `openExternal(url)`, và `providerAuthUrls` tại `:16-22` trỏ tới trang marketing (`https://claude.ai/`, `https://platform.openai.com/`) — không phải authorize endpoint, không có `client_id`/`redirect_uri`/`state`/PKCE. Contract `ProviderConnectionAuthResult` (`src/contracts/settings.ts:74-78`) chỉ có `{provider, opened, url}`, **không có field token** nào để một flow thật trả về. `authMode: "device"` của Kiro (`provider-catalog.ts:60`) đi cùng đường `openExternal`, không có device-code implementation.
+Residual còn lại là OAuth/device wording/flow: `openProviderAuth()` vẫn mở trang provider bằng browser để người dùng tự lấy credential, chưa có callback listener, device-code exchange, token refresh, hay provider SDK. Vì vậy tài liệu này được đánh dấu Done/P0 residual thay vì P0 mở.
 
 ## Mục tiêu
 
@@ -78,9 +65,9 @@ Mở rộng `tests/settings-service.test.ts`:
 
 ## Acceptance
 
-- [ ] Bấm Connect với API key hợp lệ và CLI đã cài → card hiện `connected` **sau khi** verify chạy, không phải trước.
-- [ ] Bấm Connect khi CLI chưa cài → card hiện `disconnected` kèm lý do, không phải `connected`.
-- [ ] Provider chưa từng verify hiện pill "Unverified" có style (không phải chip trắng trơn).
-- [ ] Integrations page hiện cùng trạng thái đó, không có state nào không được style.
-- [ ] Không còn chỗ nào trong `src/renderer` hardcode `status: "connected"` — verify bằng grep.
-- [ ] `npm test` xanh.
+- [x] Bấm Connect với API key hợp lệ và CLI đã cài → card chỉ hiện `connected` sau khi verify chạy, không phải trước.
+- [x] Bấm Connect khi CLI chưa cài → card hiện `disconnected` kèm lý do, không phải `connected`.
+- [x] Provider chưa từng verify hiện pill `Unverified` có style.
+- [x] Integrations page hiện cùng trạng thái đó, không có state nào không được style.
+- [x] Không còn chỗ renderer connect/reconnect tự hardcode `status: "connected"`.
+- [x] `npm run typecheck` và settings tests xanh.

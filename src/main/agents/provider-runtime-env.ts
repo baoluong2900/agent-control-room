@@ -13,7 +13,25 @@ export const providerByCli: Partial<Record<AgentCliId, ProviderConnection["provi
   amazonq: "kiro",
 };
 
-const customApiCompatible = new Set<AgentCliId>(["aider", "opencode", "custom", "agy", "grok", "qwen"]);
+/**
+ * CLIs that talk to an OpenAI-compatible `/v1` endpoint and read `OPENAI_BASE_URL`
+ * (or the `OPENAI_API_BASE` spelling). Any provider that *is* such an endpoint —
+ * `custom-api` and the local Hermes Agent proxy — can drive these.
+ */
+const openAiCompatibleClis = new Set<AgentCliId>(["aider", "opencode", "custom", "agy", "grok", "qwen", "codex"]);
+
+/**
+ * Providers a CLI can be pointed at, in preference order. A CLI's own vendor
+ * provider wins; an OpenAI-compatible gateway is the fallback so a user who runs
+ * `hermes proxy start` can drive Codex/Aider/OpenCode without a vendor key.
+ */
+export function compatibleProvidersForCli(cliId: AgentCliId): ProviderConnection["provider"][] {
+  const providers: ProviderConnection["provider"][] = [];
+  const native = providerByCli[cliId];
+  if (native) providers.push(native);
+  if (openAiCompatibleClis.has(cliId)) providers.push("hermes-agent", "custom-api");
+  return providers;
+}
 
 /**
  * Statuses a connection can be spawned with. "unverified" is included on purpose:
@@ -34,17 +52,35 @@ export function selectProviderConnection(
     return connected.find((connection) => connection.id === requestedId) ?? null;
   }
 
-  const nativeProvider = providerByCli[cliId];
-  if (nativeProvider) {
-    return connected.find((connection) => connection.provider === nativeProvider) ?? null;
-  }
-
-  if (customApiCompatible.has(cliId)) {
-    return connected.find((connection) => connection.provider === "custom-api") ?? null;
+  for (const provider of compatibleProvidersForCli(cliId)) {
+    const match = connected.find((connection) => connection.provider === provider);
+    if (match) return match;
   }
 
   return null;
 }
+
+/**
+ * The endpoint a connection routes through. Hermes Agent connections default to
+ * the proxy's own bind address (`hermes proxy start` listens on 8645) so the
+ * common case needs no typing, while an explicit base URL still wins.
+ */
+export function resolveConnectionBaseUrl(connection: ProviderConnection): string | undefined {
+  const explicit = connection.baseUrl?.trim();
+  if (explicit) return explicit;
+  if (connection.provider === "hermes-agent") return HERMES_PROXY_DEFAULT_BASE_URL;
+  return undefined;
+}
+
+/** Default bind address of `hermes proxy start` (host 127.0.0.1, port 8645). */
+export const HERMES_PROXY_DEFAULT_BASE_URL = "http://127.0.0.1:8645/v1";
+
+/**
+ * Placeholder bearer for the Hermes proxy. The proxy accepts any token and
+ * attaches the user's real OAuth credentials upstream, but the CLIs refuse to
+ * start with an empty key, so one is always supplied.
+ */
+const HERMES_PROXY_PLACEHOLDER_KEY = "hermes-proxy";
 
 export function buildProviderRuntimeEnv({ connection, secret }: ProviderRuntimeContext): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -54,7 +90,7 @@ export function buildProviderRuntimeEnv({ connection, secret }: ProviderRuntimeC
     AGENTIC_PROVIDER_ACCOUNT: connection.accountLabel ?? "",
   };
 
-  const baseUrl = connection.baseUrl?.trim();
+  const baseUrl = resolveConnectionBaseUrl(connection);
   if (baseUrl) {
     env.AGENTIC_PROVIDER_BASE_URL = baseUrl;
     // Both spellings are set because CLIs disagree on which they read, and an
@@ -67,6 +103,7 @@ export function buildProviderRuntimeEnv({ connection, secret }: ProviderRuntimeC
         break;
       case "openai-codex":
       case "custom-api":
+      case "hermes-agent":
         env.OPENAI_BASE_URL = baseUrl;
         env.OPENAI_API_BASE = baseUrl;
         break;
@@ -75,26 +112,35 @@ export function buildProviderRuntimeEnv({ connection, secret }: ProviderRuntimeC
     }
   }
 
-  if (!secret) return env;
+  // The proxy authenticates upstream on the user's behalf, so a stored key is
+  // optional here — but the OpenAI SDK inside every CLI still demands one.
+  const effectiveSecret =
+    connection.provider === "hermes-agent" ? secret?.trim() || HERMES_PROXY_PLACEHOLDER_KEY : secret;
 
-  env.AGENTIC_PROVIDER_API_KEY = secret;
+  if (!effectiveSecret) return env;
+
+  env.AGENTIC_PROVIDER_API_KEY = effectiveSecret;
 
   switch (connection.provider) {
     case "openai-codex":
-      env.OPENAI_API_KEY = secret;
+      env.OPENAI_API_KEY = effectiveSecret;
       break;
     case "claude-code":
-      env.ANTHROPIC_API_KEY = secret;
+      env.ANTHROPIC_API_KEY = effectiveSecret;
       break;
     case "github-copilot":
-      env.GITHUB_TOKEN = secret;
+      env.GITHUB_TOKEN = effectiveSecret;
       break;
     case "kiro":
-      env.KIRO_API_KEY = secret;
+      env.KIRO_API_KEY = effectiveSecret;
+      break;
+    case "hermes-agent":
+      env.OPENAI_API_KEY = effectiveSecret;
+      env.HERMES_PROXY_API_KEY = effectiveSecret;
       break;
     case "custom-api":
-      env.OPENAI_API_KEY = secret;
-      env.CUSTOM_API_KEY = secret;
+      env.OPENAI_API_KEY = effectiveSecret;
+      env.CUSTOM_API_KEY = effectiveSecret;
       break;
   }
 

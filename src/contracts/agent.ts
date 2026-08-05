@@ -130,6 +130,31 @@ export interface AgentModelProbe {
   checkedAt: string;
 }
 
+/**
+ * How a CLI is driven in structured chat mode, when it supports one.
+ *
+ * Deliberately plain data with no functions: the whole catalog crosses the
+ * contextBridge via `agent:catalog`, and a function on a descriptor would either
+ * vanish or throw on the way to the renderer.
+ */
+export interface AgentStructuredChat {
+  /** Args that replace `baseArgs` for a chat run, e.g. `-p --output-format json`. */
+  args: string[];
+  /** Flag that resumes an existing conversation; the id is appended after it. */
+  resumeFlag: string;
+  /**
+   * Flag whose value is the prompt, for CLIs whose print flag requires its
+   * argument (agy's `--print` errors with "flag needs an argument" otherwise).
+   * When set the prompt is emitted as `<flag> <prompt>` at the end of argv;
+   * when absent the prompt is appended as a bare positional.
+   */
+  promptFlag?: string;
+  /** JSON keys carrying the conversation id, tried in order. */
+  conversationIdFields?: string[];
+  /** `json` = one object for the whole run, `jsonl` = one object per line. */
+  outputFormat?: "json" | "jsonl";
+}
+
 /** Static description of a locally installable agent CLI. */
 export interface AgentCliDescriptor {
   id: AgentCliId;
@@ -163,6 +188,12 @@ export interface AgentCliDescriptor {
   options?: AgentCliOption[];
   /** Optional args that make the CLI print its own model list. */
   modelListArgs?: string[];
+  /**
+   * Present only on CLIs that can hold a structured conversation. Its absence is
+   * what makes `uiMode: "chat"` unavailable, so adding a third chat-capable CLI
+   * is a catalog entry rather than a change to the argv builder.
+   */
+  structuredChat?: AgentStructuredChat;
   models: AgentModelOption[];
 }
 

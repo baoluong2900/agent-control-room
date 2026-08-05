@@ -1,5 +1,5 @@
 import { Bot, CornerDownLeft, Loader2, Radio, Square, Terminal, X } from "lucide-react";
-import type { AgentProfile } from "@contracts";
+import type { AgentProfile, AgentStatus } from "@contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { resolveModuleSeed } from "./agent-modules";
 import { statusLabel, type TerminalChunk, useAgentsStore } from "../stores/agents-store";
@@ -22,11 +22,18 @@ const streamLabels: Record<TerminalChunk["stream"], string> = {
 export function AgentChatPanel({
   cwd,
   profile,
+  supportsStructuredChat,
   onClose,
   onOpenTerminal,
 }: {
   cwd: string;
   profile: AgentProfile;
+  /**
+   * Whether this profile's CLI declares a `structuredChat` capability. Chat is
+   * still allowed without one — the panel just runs one-shot prompts — but the
+   * user is told so rather than left wondering why the agent forgot the thread.
+   */
+  supportsStructuredChat: boolean;
   onClose: () => void;
   onOpenTerminal: () => void;
 }) {
@@ -36,7 +43,7 @@ export function AgentChatPanel({
   const chunks = runId ? terminals[runId] ?? [] : [];
   const module = resolveModuleSeed({ moduleId: profile.module, tags: profile.tags, cliId: profile.cliId });
   const session = useMemo(() => sessions.find((entry) => entry.runId === runId), [runId, sessions]);
-  const live = Boolean(session);
+  const live = Boolean(session) || runStatusIsLive(runtimes[profile.id]?.status);
   const messages = useMemo(() => {
     const source = profile.cliId === "shell" ? chunks : chatThreads[profile.id] ?? chunks;
     return buildChatMessages(source).slice(-80);
@@ -63,7 +70,10 @@ export function AgentChatPanel({
       const prompt = draft.trim() || fallbackPrompt(profile, module.defaultPrompt);
       const launched = await runProfile(profile, {
         cwd,
-        interactive: false,
+        // Structured chat is a one-shot print-mode invocation per turn: the
+        // prompt goes in argv and the process exits when the answer is done.
+        // Only CLIs without that capability keep an interactive stdin session.
+        interactive: supportsStructuredChat ? false : true,
         uiMode: "chat",
         resumeConversationId: chatConversationIds[profile.id],
         prompt,
@@ -76,6 +86,15 @@ export function AgentChatPanel({
 
   const send = async () => {
     const text = draft.trim();
+
+    // A structured-chat turn is always a fresh run resumed by conversation id —
+    // the previous process has already exited, so there is no stdin to write to.
+    if (supportsStructuredChat) {
+      if (!text) return;
+      await start();
+      return;
+    }
+
     if (live && !text) return;
 
     if (!live || !runId) {
@@ -129,6 +148,12 @@ export function AgentChatPanel({
         <span>{cwd || "no folder selected"}</span>
       </div>
       {!cwd && <p className="terminal-warning">Select a project folder first so this agent has a working directory.</p>}
+      {!supportsStructuredChat && (
+        <p className="terminal-warning">
+          {profile.cliId} has no structured chat mode, so each message runs as a fresh one-shot prompt and earlier turns
+          are not carried over.
+        </p>
+      )}
 
       <div className="agent-chat-messages" ref={messagesRef}>
         {messages.length === 0 ? (
@@ -160,13 +185,25 @@ export function AgentChatPanel({
               void send();
             }
           }}
-          placeholder={live ? "Message the running agent…" : "Start a chat task for this agent…"}
+          placeholder={
+            supportsStructuredChat
+              ? live
+                ? "Agent is answering — your next message starts the following turn…"
+                : "Send a task to this agent…"
+              : live
+                ? "Message the running agent…"
+                : "Start a chat task for this agent…"
+          }
           rows={2}
           value={draft}
         />
-        <button className="primary-action agent-chat-send" disabled={busy || !cwd || (live && !draft.trim())} onClick={send}>
+        <button
+          className="primary-action agent-chat-send"
+          disabled={busy || !cwd || (supportsStructuredChat ? live || !draft.trim() : live && !draft.trim())}
+          onClick={send}
+        >
           {busy ? <Loader2 className="spin" size={14} /> : <CornerDownLeft size={14} />}
-          {live ? "Send" : "Start"}
+          {supportsStructuredChat ? (live ? "Working…" : "Send") : live ? "Send" : "Start"}
         </button>
       </footer>
     </section>
@@ -261,13 +298,21 @@ function firstStructuredText(value: unknown): string | null {
   if (typeof value !== "object") return null;
 
   const record = value as Record<string, unknown>;
-  const direct = [record.result, record.message, record.content, record.text, record.summary]
+  // `response` is agy's field; `result` is claude's. Both come first so a
+  // wrapper envelope's own `message`/`content` never shadows the real answer.
+  const direct = [record.response, record.result, record.message, record.content, record.text, record.summary]
     .map((entry) => firstStructuredText(entry))
     .find((entry): entry is string => Boolean(entry));
   if (direct) return direct;
 
+  // Agy format: { "type": "text", "text": "..." }
   if (record.type === "text" && typeof record.text === "string") {
     return record.text.trim() || null;
+  }
+
+  // Agy/OpenAI format: { "role": "assistant", "content": "..." }
+  if (record.role === "assistant" && typeof record.content === "string") {
+    return record.content.trim() || null;
   }
 
   return null;
@@ -278,4 +323,8 @@ function splitParagraphs(value: string): string[] {
     .split(/\n{2,}/)
     .map((part) => part.trim())
     .filter(Boolean);
+}
+
+function runStatusIsLive(status?: AgentStatus): boolean {
+  return status !== "completed" && status !== "failed" && status !== "stopped";
 }

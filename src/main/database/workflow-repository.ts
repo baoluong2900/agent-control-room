@@ -13,6 +13,7 @@ import type {
   WorkflowTriggerType,
 } from "@contracts";
 import { ensureColumns, type SqliteDatabase } from "./sqlite-types";
+import { runMigrations, workflowMigrations } from "./migrations";
 import { workflowSeeds } from "../workflows/workflow-seeds";
 
 type WorkflowRow = {
@@ -94,6 +95,34 @@ type StepRunRow = {
 export class WorkflowRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
+  /**
+   * Brings a bare database up to a usable workflow schema in the same order
+   * `DesktopDatabase.migrate()` uses: baseline tables, then the versioned column
+   * steps that target workflow tables, then seeds. Tests that drive the
+   * repository without a `DesktopDatabase` go through here so they cannot drift
+   * from the production ordering.
+   *
+   * Only the workflow-owned versions run: the rest of `appMigrations` alters
+   * tables (`provider_connections`, `tasks`, ...) that a workflow-only database
+   * never creates, and would fail on the missing table.
+   */
+  static bootstrap(db: SqliteDatabase): WorkflowRepository {
+    const repo = new WorkflowRepository(db);
+    repo.migrate();
+    runMigrations(db, workflowMigrations());
+    repo.seed();
+    return repo;
+  }
+
+  /**
+   * Baseline DDL only: the tables must exist before `appMigrations` runs, because
+   * the versioned steps assume them. Every *column* added since the first release
+   * lives in `migrations.ts` instead — see `workflow-repository-legacy-columns`
+   * (version 7). Nothing new belongs in this method; add a migration version.
+   *
+   * Seeding is deliberately not done here. It writes columns that later versions
+   * add, so `DesktopDatabase.migrate()` calls `seed()` after `runMigrations`.
+   */
   migrate(): void {
     this.db.exec(`
       create table if not exists workflows (
@@ -149,42 +178,13 @@ export class WorkflowRepository {
       create index if not exists idx_workflow_runs_workflow on workflow_runs (workflow_id, started_at desc);
       create index if not exists idx_workflow_step_runs_run on workflow_step_runs (workflow_run_id, step_order);
     `);
-
-    ensureColumns(this.db, "workflows", [
-      { name: "description", ddl: "text not null default ''" },
-      { name: "status", ddl: "text not null default 'draft'" },
-      { name: "favorite", ddl: "integer not null default 0" },
-      { name: "owner", ddl: "text not null default 'You'" },
-      { name: "project_path", ddl: "text" },
-      { name: "trigger_type", ddl: "text not null default 'manual'" },
-      { name: "trigger_schedule", ddl: "text" },
-      { name: "trigger_detail", ddl: "text" },
-      { name: "integrations", ddl: "text not null default '[]'" },
-      { name: "baseline_runs", ddl: "integer not null default 0" },
-      { name: "baseline_success_rate", ddl: "real not null default 0" },
-      { name: "baseline_avg_duration_ms", ddl: "integer not null default 0" },
-      { name: "baseline_last_run_at", ddl: "text" },
-      { name: "updated_at", ddl: "text" },
-    ]);
-
-    ensureColumns(this.db, "workflow_steps", [
-      { name: "name", ddl: "text not null default 'Step'" },
-      { name: "kind", ddl: "text not null default 'execute'" },
-      { name: "summary", ddl: "text not null default ''" },
-      { name: "model", ddl: "text not null default ''" },
-      { name: "profile_id", ddl: "text" },
-      { name: "provider_connection_id", ddl: "text" },
-      { name: "shell_command", ddl: "text" },
-      { name: "timeout_seconds", ddl: "integer not null default 600" },
-      { name: "requires_approval", ddl: "integer not null default 0" },
-      { name: "continue_on_error", ddl: "integer not null default 0" },
-      { name: "enabled", ddl: "integer not null default 1" },
-    ]);
-
-    this.seed();
   }
 
-  private seed(): void {
+  /**
+   * Inserts the starter workflows on a database that has none. Runs after
+   * `appMigrations`, since the insert touches columns those versions add.
+   */
+  seed(): void {
     const seeded = this.db.prepare("select value from workflow_metadata where key = 'seeds_initialized'").get() as
       | { value: string }
       | undefined;

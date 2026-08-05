@@ -61,6 +61,19 @@ export interface KnowledgeCodeGraph {
   edges: KnowledgeGraphEdge[];
 }
 
+export interface KnowledgeTruncationReport {
+  hitFileLimit: boolean;
+  filesSeen: number;
+  filesIndexed: number;
+  skippedUnsupported: number;
+  skippedTooLarge: number;
+  skippedBinary: number;
+  skippedUnreadable: number;
+  graphNodesDropped: number;
+  graphEdgesDropped: number;
+  largestSkipped?: Array<{ path: string; bytes: number }>;
+}
+
 export interface KnowledgeSnapshot {
   projectPath: string;
   projectName: string;
@@ -75,6 +88,7 @@ export interface KnowledgeSnapshot {
   files: KnowledgeFileInsight[];
   graph: KnowledgeCodeGraph;
   agentBrief: string;
+  truncation?: KnowledgeTruncationReport;
 }
 
 export interface KnowledgeExportResult {

@@ -17,12 +17,12 @@ scripts/         # harness verify bằng Electron thật
 tests/           # node:test chạy qua TS loader
 ```
 
-Kết quả kiểm chứng (đã chạy thật, không phải giả định):
+Kết quả kiểm chứng ban đầu sau migration:
 
 | Lệnh | Kết quả |
 | --- | --- |
 | `npm run typecheck` | Pass, không lỗi |
-| `npm test` | Pass 76/76 |
+| `npm test` | Pass 76/76 tại thời điểm migration; suite hiện đã mở rộng trong các feature pass sau |
 | `npm run package` | Pass, build được app macOS arm64 |
 | `grep apps/desktop\|packages/contracts` | Không còn tham chiếu nào |
 
@@ -30,7 +30,7 @@ Kết luận quan trọng: **migration đã sạch**. Cảm giác "bug nhiều q
 build hay test, mà đến từ các lỗi logic runtime chỉ xuất hiện khi dùng app thật —
 đúng những chỗ mà typecheck và test hiện tại không chạm tới.
 
-## 2. Bug đã xác nhận
+## 2. Bug đã xác nhận trong pass migration
 
 ### B1 — Dừng agent bằng tay bị ghi đè thành "failed" (nghiêm trọng)
 
@@ -115,12 +115,27 @@ cả ba bug nằm. Việc còn thiếu, xếp theo mức độ đáng làm:
 
 ## 4. Cách kiểm chứng
 
-Tất cả các lệnh dưới đây đã được chạy thật sau khi sửa và đều pass:
+Tất cả các lệnh dưới đây đã được chạy thật sau khi sửa migration/lifecycle và đều pass:
 
 ```bash
 npm run typecheck        # clean
-npm test                 # 79/79 pass
+npm test                 # 79/79 pass tại thời điểm đó
 npm run package          # build macOS arm64 thành công
 npm run verify:agents    # ALL CHECKS PASSED
 npm run verify:agents:proc  # ALL CHECKS PASSED (gồm "stopped status recorded")
 ```
+
+## 5. Cập nhật sau các feature pass ngày 2026-08-04
+
+Các gap chính trong `docs/feature/` đã được thu hẹp sau bản migration ban đầu:
+
+- `schema_migrations` đã có cho app DB chính; workflow repository vẫn còn legacy `ensureColumns` cần gom dần về migration version.
+- Provider verification local đã được nối end-to-end; connection mới không còn tự nhận `connected` trước khi verify. OAuth/device token exchange vẫn là future work.
+- Workflow step chaining/profile binding đã có và giữ context qua approval gate.
+- Workflow metrics delta đã được tính từ historical windows thay vì nằm chết trong type/UI.
+- Unsupported remote triggers đã được gated/warned; `file-change` runner local đã có. Remote `git-push`/issue/webhook vẫn chưa có runner thật.
+- Agent lifecycle đã có restart và concurrency queue; SIGTERM escalation/tree-kill vẫn là hardening còn lại.
+- Terminal logs đã có per-message truncation, per-run pruning, và startup retention sweep.
+- Knowledge scan đã có `KnowledgeTruncationReport`, persist `truncation_json`, UI warning/rescan action, và Markdown/XML export report.
+
+Verification mới nhất cho pass knowledge/doc sync: `npm run test:workflows -- tests/knowledge-service.test.ts` pass 136 tests, và `npm run typecheck` pass.

@@ -113,7 +113,7 @@
 .settings-stats {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .settings-stat {
@@ -298,6 +298,12 @@
   min-width: 0;
 }
 
+.settings-field-hint {
+  color: #887ea1;
+  font-size: 10px;
+  font-weight: 400;
+}
+
 .settings-field input {
   background: rgba(7, 8, 21, 0.82);
   border: 1px solid rgba(46, 135, 244, 0.18);
@@ -438,22 +444,40 @@
 
 .provider-card {
   background:
-    radial-gradient(120% 140% at 90% -20%, rgba(167, 139, 250, 0.14), transparent 58%),
+    radial-gradient(120% 140% at 90% -20%, color-mix(in srgb, var(--provider-accent, #a78bfa) 16%, transparent), transparent 58%),
     linear-gradient(145deg, rgba(17, 22, 43, 0.86), rgba(7, 8, 21, 0.8));
   border: 1px solid rgba(247, 243, 255, 0.12);
-  border-radius: 8px;
+  border-radius: 12px;
   box-shadow: 0 18px 42px rgba(7, 8, 21, 0.24), inset 0 1px rgba(247, 243, 255, 0.04);
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 16px;
+  position: relative;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+/* A provider with a usable connection gets its accent on the top edge so the
+   set-up ones are findable at a glance in a grid of six. */
+.provider-card.is-live {
+  border-color: color-mix(in srgb, var(--provider-accent, #a78bfa) 42%, transparent);
+  box-shadow:
+    0 18px 42px rgba(7, 8, 21, 0.3),
+    inset 0 1px rgba(247, 243, 255, 0.05),
+    inset 0 3px 0 -1px color-mix(in srgb, var(--provider-accent, #a78bfa) 70%, transparent);
 }
 
 .provider-head {
-  align-items: center;
+  align-items: start;
   display: grid;
   gap: 10px;
   grid-template-columns: 34px minmax(0, 1fr) auto;
+}
+
+.provider-head-status {
+  align-items: center;
+  display: inline-flex;
+  padding-top: 2px;
 }
 
 .provider-icon {
@@ -467,15 +491,73 @@
   min-width: 0;
 }
 
+/* The description is the one place a provider explains itself, so it wraps to a
+   few lines instead of being clipped like the other `small` labels. */
+.provider-head-copy small {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.provider-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.provider-tag {
+  background: rgba(7, 8, 21, 0.62);
+  border: 1px solid rgba(247, 243, 255, 0.1);
+  border-radius: 999px;
+  color: #b9b0d4;
+  font-size: 10.5px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+
+.provider-tag.mono,
+.provider-connection-copy small .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+
 .provider-create {
   align-items: end;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* The endpoint is a full URL; a half-width column truncates it while typing. */
+.provider-field-wide {
+  grid-column: 1 / -1;
 }
 
 .provider-create .settings-field {
   margin: 0;
+  min-width: 0;
+}
+
+.provider-create-foot {
+  align-items: center;
+  border-top: 1px solid rgba(247, 243, 255, 0.08);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding-top: 12px;
+}
+
+.provider-connect-hint {
+  color: #9d94b2;
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.provider-create-foot .settings-action {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .provider-connection-list {
@@ -564,6 +646,14 @@
   padding: 7px 10px;
 }
 
+/* Verify is the action that turns an unchecked record into a usable one, so it
+   reads as the primary choice in the row. */
+.settings-mini-button.primary {
+  background: rgba(103, 232, 249, 0.12);
+  border-color: rgba(103, 232, 249, 0.32);
+  color: #ddfaff;
+}
+
 .settings-mini-button.danger {
   color: #fecdd4;
 }
@@ -585,6 +675,12 @@
   }
 }
 
+@media (max-width: 1440px) {
+  .settings-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1180px) {
   .settings-grid,
   .settings-provider-grid {
@@ -598,6 +694,15 @@
   .settings-login-methods,
   .provider-create {
     grid-template-columns: 1fr;
+  }
+
+  .provider-create-foot {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .provider-create-foot .settings-action {
+    justify-content: center;
   }
 
   .provider-connection-row,

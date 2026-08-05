@@ -11,13 +11,16 @@ import type {
 import type { DesktopDatabase } from "../database/desktop-database";
 import { pingAgentCli } from "../agents/probe";
 import { ProviderSecretVault } from "./provider-secret-vault";
-import { verifyProviderConnection } from "./provider-verification";
+import { defaultEndpointProbe, verifyProviderConnection, type EndpointProbe } from "./provider-verification";
 
 const providerAuthUrls: Record<ProviderConnection["provider"], string | undefined> = {
   "openai-codex": "https://platform.openai.com/",
   "claude-code": "https://claude.ai/",
   "github-copilot": "https://github.com/login",
   kiro: "https://kiro.dev/",
+  // The Hermes proxy is a local process, not a hosted login page. Its docs are
+  // the only useful thing to open.
+  "hermes-agent": "https://hermes-agent.nousresearch.com/docs/",
   "custom-api": undefined,
 };
 
@@ -47,6 +50,7 @@ export class SettingsService {
     private readonly secretVault: ProviderSecretVault,
     private readonly linkOpener: ExternalLinkOpener,
     private readonly cliProbe: CliProbe = defaultCliProbe,
+    private readonly endpointProbe: EndpointProbe = defaultEndpointProbe,
   ) {}
 
   getIdentity(): AppIdentity {
@@ -103,6 +107,7 @@ export class SettingsService {
       connection,
       secret,
       probeCli: this.cliProbe,
+      probeEndpoint: this.endpointProbe,
     });
 
     const checkedAt = new Date().toISOString();

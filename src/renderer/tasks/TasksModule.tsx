@@ -13,6 +13,7 @@ import {
   ListChecks,
   Network,
   PlayCircle,
+  RefreshCw,
   Route,
   Search,
   Settings,
@@ -215,10 +216,13 @@ const taskSeeds: TaskBlueprint[] = [
   },
 ];
 
+// `blocked` and `failed` are deliberately different tones: blocked waits on the
+// user to fix a precondition, failed exhausted its retries and offers a button.
 const statusMeta: Record<TaskStatus, { label: string; tone: string }> = {
   open: { label: "Open", tone: "blue" },
   investigating: { label: "Investigating", tone: "purple" },
   blocked: { label: "Blocked", tone: "red" },
+  failed: { label: "Failed", tone: "orange" },
   done: { label: "Done", tone: "green" },
 };
 
@@ -235,7 +239,7 @@ const difficultyMeta: Record<TaskDifficulty, { label: string; priority: TaskPrio
   epic: { label: "Epic", priority: "high", tone: "red" },
 };
 
-const statusFilters: Array<TaskStatus | "all"> = ["all", "open", "investigating", "blocked", "done"];
+const statusFilters: Array<TaskStatus | "all"> = ["all", "open", "investigating", "blocked", "failed", "done"];
 const schedulerCliOptions = cliOptions.filter((cliId) => cliId !== "custom");
 
 export function TasksModule({
@@ -396,6 +400,7 @@ export function TasksModule({
     open: displayedTasks.filter((task) => task.status === "open").length,
     investigating: displayedTasks.filter((task) => task.status === "investigating").length,
     blocked: displayedTasks.filter((task) => task.status === "blocked").length,
+    failed: displayedTasks.filter((task) => task.status === "failed").length,
     done: displayedTasks.filter((task) => task.status === "done").length,
   };
 
@@ -553,6 +558,27 @@ export function TasksModule({
       setSelectedId(updated.id);
     } catch (error) {
       setNotice(`Could not update task status: ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * Clears the attempt budget and asks the scheduler to run now. Only offered on
+   * a `failed` task: an `open` one is already going to be picked up on its own.
+   */
+  async function retryTaskNow(task: TaskItem) {
+    const savedTask = task.record;
+    if (!savedTask) return;
+    setNotice(null);
+    try {
+      const result = await window.agentic.tasks.retryNow(savedTask.id);
+      await loadTasks();
+      setNotice(
+        result.started.length > 0
+          ? `Retrying "${savedTask.title}".`
+          : `Reset "${savedTask.title}" — it will run on the next scheduler tick.`,
+      );
+    } catch (error) {
+      setNotice(`Could not retry task: ${formatError(error)}`);
     }
   }
 
@@ -744,6 +770,19 @@ export function TasksModule({
               </span>
             </div>
 
+            {selected.record?.lastError && (
+              <p className="task-retry-note">
+                <AlertTriangle size={13} />
+                <span>
+                  <strong>
+                    Attempt {selected.record.attemptCount}/{selected.record.maxAttempts}
+                    {selected.record.nextRetryAt ? ` · next try ${formatDue(selected.record.nextRetryAt)}` : ""}
+                  </strong>
+                  {selected.record.lastError}
+                </span>
+              </p>
+            )}
+
             {parentTask && (
               <p className="task-parent-link">
                 <Network size={13} />
@@ -807,6 +846,12 @@ export function TasksModule({
                 <Clock3 size={14} />
                 Open
               </button>
+              {selected.record?.status === "failed" && (
+                <button className="tasks-ghost" onClick={() => void retryTaskNow(selected)}>
+                  <RefreshCw size={14} />
+                  Retry Now
+                </button>
+              )}
               <button className="tasks-ghost" onClick={() => void setTaskStatus(selected, "blocked")}>
                 <AlertTriangle size={14} />
                 Block
@@ -1352,6 +1397,11 @@ function TaskCard({
         {task.record?.parentTaskId && <span>Subtask</span>}
         {task.record?.automationEnabled && <span>{formatDue(task.record?.dueAt)}</span>}
         {task.record?.difficulty && <span>{difficultyMeta[task.record.difficulty].label}</span>}
+        {(task.record?.attemptCount ?? 0) > 0 && (
+          <span>
+            Attempt {task.record?.attemptCount}/{task.record?.maxAttempts}
+          </span>
+        )}
         <span>{cliId ? cliDisplayName(cliId, diagnostics) : "No CLI"}</span>
         <span>{model}</span>
       </footer>

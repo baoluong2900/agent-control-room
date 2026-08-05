@@ -308,6 +308,9 @@ export function AgentsPage({
             <AgentChatPanel
               cwd={chatProfile.cwd || projectPath}
               profile={chatProfile}
+              supportsStructuredChat={Boolean(
+                catalog.find((entry) => entry.id === chatProfile.cliId)?.structuredChat,
+              )}
               onClose={() => setChatProfileId(null)}
               onOpenTerminal={() => setTerminalProfileId(chatProfile.id)}
             />
@@ -789,7 +792,9 @@ function AgentCard({
   return (
     <article className="agent-card" style={{ ["--cli-accent" as string]: profile.accent }}>
       <header>
-        <span className="agent-card-avatar">{profile.name.slice(0, 2).toUpperCase()}</span>
+        <span className="agent-card-avatar" aria-hidden="true">
+          <AgentFace accent={profile.accent} cliId={profile.cliId} size="lg" />
+        </span>
         <div className="agent-card-copy">
           <strong>{profile.name}</strong>
           <small>{profile.role}</small>

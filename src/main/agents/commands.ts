@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 import { buildOptionArgs } from "@contracts";
-import type { AgentCliId, AgentPromptMode, AgentRunInput } from "@contracts";
+import type { AgentCliId, AgentPromptMode, AgentRunInput, AgentStructuredChat } from "@contracts";
 import { getAgentDescriptor, listAgentCatalog } from "./catalog";
 
 export type Invocation = {
@@ -116,9 +116,18 @@ export async function buildInvocation(input: AgentRunInput): Promise<Invocation>
   const overrideParts = parseArgs(resolved);
   const executable = overrideParts[0] ?? resolved;
   const args = overrideParts.slice(1);
-  const structuredChat = usesStructuredChat(input);
+  const chat = input.uiMode === "chat" ? descriptor.structuredChat : undefined;
+  const structuredChat = Boolean(chat);
 
-  args.push(...(structuredChat ? structuredChatArgs(input.cliId) : input.interactive ? descriptor.interactiveArgs : descriptor.baseArgs));
+  // A chat promptFlag carries the prompt as its value, so it must be emitted
+  // last (after resume args) rather than in its declared position.
+  const chatArgs = chat
+    ? chat.promptFlag
+      ? chat.args.filter((arg) => arg !== chat.promptFlag)
+      : chat.args
+    : [];
+
+  args.push(...(chat ? chatArgs : input.interactive ? descriptor.interactiveArgs : descriptor.baseArgs));
 
   const model = input.model?.trim();
   // Sentinel ids mean "let the CLI use its own default", so no flag is sent.
@@ -131,7 +140,8 @@ export async function buildInvocation(input: AgentRunInput): Promise<Invocation>
   }
 
   if (input.extraArgs?.trim()) {
-    args.push(...parseArgs(input.extraArgs.trim()));
+    const extraArgs = parseArgs(input.extraArgs.trim());
+    args.push(...(chat ? withoutStructuredChatConflicts(extraArgs, chat.args) : extraArgs));
   }
 
   if (input.autoApprove && descriptor.autoApproveArgs?.length) {
@@ -145,24 +155,34 @@ export async function buildInvocation(input: AgentRunInput): Promise<Invocation>
 
   args.push(...buildOptionArgs(descriptor, input.options, { interactive: Boolean(input.interactive) }));
 
-  if (structuredChat && input.resumeConversationId?.trim()) {
-    args.push(...structuredChatResumeArgs(input.cliId, input.resumeConversationId.trim()));
+  if (chat && input.resumeConversationId?.trim()) {
+    args.push(chat.resumeFlag, input.resumeConversationId.trim());
   }
 
-  const promptMode: AgentPromptMode = structuredChat
-    ? "arg"
-    : input.interactive
-      ? "stdin"
-      : input.promptMode ?? descriptor.promptMode;
-
+  // Structured chat never pipes the prompt: these CLIs are one-shot print-mode
+  // invocations that take the prompt in argv. Sending it on stdin (which the old
+  // `interactive ? "stdin"` branch did) left agy erroring on a missing flag
+  // argument and claude waiting on a pipe that never carried the task.
   let stdinPrompt: string | undefined;
   if (prompt) {
-    if (promptMode === "arg") {
-      args.push(prompt);
-    } else if (promptMode === "flag" && descriptor.promptFlag) {
-      args.push(descriptor.promptFlag, prompt);
+    if (chat) {
+      if (chat.promptFlag) {
+        args.push(chat.promptFlag, prompt);
+      } else {
+        args.push(prompt);
+      }
     } else {
-      stdinPrompt = prompt;
+      const promptMode: AgentPromptMode = input.interactive
+        ? "stdin"
+        : input.promptMode ?? descriptor.promptMode;
+
+      if (promptMode === "arg") {
+        args.push(prompt);
+      } else if (promptMode === "flag" && descriptor.promptFlag) {
+        args.push(descriptor.promptFlag, prompt);
+      } else {
+        stdinPrompt = prompt;
+      }
     }
   }
 
@@ -199,24 +219,48 @@ export function quoteCommand(parts: string[]): string {
     .join(" ");
 }
 
+/**
+ * Whether this run is a structured chat. Driven entirely by the catalog: a CLI
+ * without a `structuredChat` block cannot chat, no matter what `uiMode` asks
+ * for. `shell` has no descriptor, so it is excluded before the lookup.
+ */
 export function usesStructuredChat(input: Pick<AgentRunInput, "cliId" | "uiMode">): boolean {
-  return input.uiMode === "chat" && (input.cliId === "claude" || input.cliId === "agy");
+  return input.uiMode === "chat" && Boolean(structuredChatFor(input.cliId));
 }
 
-function structuredChatArgs(cliId: AgentCliId): string[] {
-  if (cliId === "claude") {
-    return ["-p", "--output-format", "json"];
+/** The chat capability for a CLI, or undefined when it has none. */
+export function structuredChatFor(cliId: AgentCliId): AgentStructuredChat | undefined {
+  if (cliId === "shell") return undefined;
+  try {
+    return getAgentDescriptor(cliId).structuredChat;
+  } catch {
+    return undefined;
   }
-
-  if (cliId === "agy") {
-    return ["--print", "--output-format", "json"];
-  }
-
-  return [];
 }
 
-function structuredChatResumeArgs(cliId: AgentCliId, conversationId: string): string[] {
-  if (cliId === "claude") return ["--resume", conversationId];
-  if (cliId === "agy") return ["--conversation", conversationId];
-  return [];
+/**
+ * Removes user/profile args that set a flag already owned by structured chat.
+ * The capability is authoritative while chat mode is active; sending two
+ * `--output-format` values otherwise makes behaviour depend on the CLI parser.
+ */
+export function withoutStructuredChatConflicts(extraArgs: string[], chatArgs: string[]): string[] {
+  const ownedFlags = new Set(chatArgs.filter((arg) => arg.startsWith("-")));
+  const filtered: string[] = [];
+
+  for (let index = 0; index < extraArgs.length; index += 1) {
+    const arg = extraArgs[index];
+    const flag = arg.split("=", 1)[0];
+    if (!ownedFlags.has(flag)) {
+      filtered.push(arg);
+      continue;
+    }
+
+    // `--flag=value` is self-contained. For `--flag value`, discard the value
+    // too unless the next token is another flag.
+    if (!arg.includes("=") && extraArgs[index + 1] && !extraArgs[index + 1].startsWith("-")) {
+      index += 1;
+    }
+  }
+
+  return filtered;
 }

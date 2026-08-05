@@ -14,7 +14,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Kiro CLI",
     vendor: "AWS",
     description: "Agentic coding in the terminal with tool use and local context.",
-    accent: "#8b5cf6",
+    accent: "#a78bfa",
     docsUrl: "https://kiro.dev",
     // `kiro-cli` is the terminal agent; plain `kiro` only launches the IDE.
     commandCandidates: platformCandidates("kiro-cli").concat(platformCandidates("kiro-cli-chat")),
@@ -74,7 +74,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Agy",
     vendor: "Local",
     description: "Terminal agent with print mode, effort levels, and permission control.",
-    accent: "#38bdf8",
+    accent: "#7dd3fc",
     commandCandidates: platformCandidates("agy"),
     versionArgs: ["--version"],
     baseArgs: [],
@@ -85,8 +85,18 @@ const catalog: AgentCliDescriptor[] = [
     supportsInteractive: true,
     supportsStdin: true,
     autoApproveArgs: ["--dangerously-skip-permissions"],
-    // Verified against `agy --help`. `--output-format` is deliberately absent:
-    // structured chat runs own that flag.
+    structuredChat: {
+      // Order matters: agy's `--print` consumes the next token as its prompt, so
+      // `--output-format` must come first or it is swallowed as the prompt text.
+      // `--print` also refuses to read stdin ("flag needs an argument"), hence
+      // promptFlag — the prompt is passed as its value, never piped.
+      args: ["--output-format", "json", "--print"],
+      promptFlag: "--print",
+      resumeFlag: "--conversation",
+      conversationIdFields: ["conversation_id"],
+    },
+    // Verified against `agy --help`. `--output-format` is deliberately absent
+    // from `options`: the `structuredChat` block above owns that flag.
     options: [
       {
         id: "effort",
@@ -203,7 +213,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Grok Build",
     vendor: "xAI",
     description: "Grok terminal TUI agent with session resume and plugins.",
-    accent: "#f97316",
+    accent: "#fdba9b",
     commandCandidates: platformCandidates("grok").concat(platformCandidates("agent")),
     versionArgs: ["--version"],
     baseArgs: [],
@@ -284,7 +294,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Claude Code",
     vendor: "Anthropic",
     description: "Anthropic's terminal agent for repo-wide edits and reviews.",
-    accent: "#f59e0b",
+    accent: "#fbbf24",
     docsUrl: "https://docs.anthropic.com/en/docs/claude-code",
     commandCandidates: platformCandidates("claude"),
     versionArgs: ["--version"],
@@ -296,6 +306,10 @@ const catalog: AgentCliDescriptor[] = [
     supportsStdin: true,
     autoApproveArgs: ["--dangerously-skip-permissions"],
     systemPromptFlag: "--append-system-prompt",
+    structuredChat: {
+      args: ["-p", "--output-format", "json"],
+      resumeFlag: "--resume",
+    },
     // Verified against `claude --help`.
     options: [
       {
@@ -354,7 +368,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Codex CLI",
     vendor: "OpenAI",
     description: "OpenAI coding agent with sandboxed local execution.",
-    accent: "#22d3ee",
+    accent: "#67e8f9",
     docsUrl: "https://github.com/openai/codex",
     commandCandidates: platformCandidates("codex"),
     versionArgs: ["--version"],
@@ -439,7 +453,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Amazon Q Developer",
     vendor: "AWS",
     description: "Amazon Q chat agent (`q`) for AWS-aware development.",
-    accent: "#a78bfa",
+    accent: "#c4b5fd",
     docsUrl: "https://docs.aws.amazon.com/amazonq/",
     commandCandidates: platformCandidates("q"),
     versionArgs: ["--version"],
@@ -459,7 +473,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Aider",
     vendor: "Open source",
     description: "Git-native pair programmer that commits as it edits.",
-    accent: "#34d399",
+    accent: "#86efac",
     docsUrl: "https://aider.chat",
     commandCandidates: platformCandidates("aider"),
     versionArgs: ["--version"],
@@ -526,7 +540,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "GitHub Copilot CLI",
     vendor: "GitHub",
     description: "Copilot coding agent in the terminal.",
-    accent: "#e879f9",
+    accent: "#f0abfc",
     docsUrl: "https://docs.github.com/copilot",
     commandCandidates: platformCandidates("copilot"),
     versionArgs: ["--version"],
@@ -547,7 +561,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Qwen Code",
     vendor: "Alibaba",
     description: "Qwen coder CLI, Gemini-CLI compatible flags.",
-    accent: "#fbbf24",
+    accent: "#fcd34d",
     docsUrl: "https://github.com/QwenLM/qwen-code",
     commandCandidates: platformCandidates("qwen"),
     versionArgs: ["--version"],
@@ -568,7 +582,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Ollama",
     vendor: "Local",
     description: "Run a fully local model as an agent brain.",
-    accent: "#67e8f9",
+    accent: "#a5f3fc",
     docsUrl: "https://ollama.com",
     commandCandidates: platformCandidates("ollama"),
     versionArgs: ["--version"],
@@ -589,7 +603,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Shell",
     vendor: "Local",
     description: "Raw shell runner for builds, tests, and scripts.",
-    accent: "#94a3b8",
+    accent: "#afa8c7",
     commandCandidates: shellCandidates(),
     versionArgs: ["--version"],
     baseArgs: [],
@@ -604,7 +618,7 @@ const catalog: AgentCliDescriptor[] = [
     displayName: "Custom CLI",
     vendor: "Bring your own",
     description: "Point at any local binary and pass your own args.",
-    accent: "#c4b5fd",
+    accent: "#d8b4fe",
     commandCandidates: [],
     versionArgs: ["--version"],
     baseArgs: [],
@@ -621,6 +635,15 @@ const byId = new Map<AgentCliId, AgentCliDescriptor>(catalog.map((entry) => [ent
 export function listAgentCatalog(): AgentCliDescriptor[] {
   return catalog.map((entry) => ({
     ...entry,
+    structuredChat: entry.structuredChat
+      ? {
+          ...entry.structuredChat,
+          args: [...entry.structuredChat.args],
+          conversationIdFields: entry.structuredChat.conversationIdFields
+            ? [...entry.structuredChat.conversationIdFields]
+            : undefined,
+        }
+      : undefined,
     models: entry.models.map((model) => ({ ...model })),
     options: entry.options?.map((option) => ({
       ...option,

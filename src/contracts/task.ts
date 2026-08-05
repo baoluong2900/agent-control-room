@@ -1,6 +1,12 @@
 import type { AgentCliId } from "./agent";
 
-export type TaskStatus = "open" | "investigating" | "blocked" | "done";
+/**
+ * `blocked` and `failed` both mean "not progressing", but they need different
+ * actions: `blocked` is a missing precondition the user must fix (no project
+ * folder, no CLI on PATH), `failed` is a run that was attempted and lost. Only
+ * `failed` participates in the retry policy.
+ */
+export type TaskStatus = "open" | "investigating" | "blocked" | "failed" | "done";
 
 export type TaskDifficulty = "small" | "medium" | "large" | "epic";
 
@@ -21,6 +27,14 @@ export interface TaskRecord {
   lastRunAt?: string | null;
   lastRunId?: string | null;
   runCount: number;
+  /** Retry attempts consumed since the last success or manual reset. */
+  attemptCount: number;
+  /** Attempts allowed before the task is parked in `failed`. */
+  maxAttempts: number;
+  /** ISO instant before which the scheduler must not pick the task up again. */
+  nextRetryAt?: string | null;
+  /** Why the last attempt failed, shown on the task card. */
+  lastError?: string | null;
   createdAt: string;
   completedAt?: string | null;
 }
@@ -38,6 +52,8 @@ export interface TaskSaveInput {
   difficulty?: TaskDifficulty | null;
   estimatedMinutes?: number | null;
   automationEnabled?: boolean;
+  /** Overrides the default attempt budget for this task. */
+  maxAttempts?: number | null;
 }
 
 export interface TaskPlanInput {

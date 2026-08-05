@@ -1,5 +1,7 @@
 # Module AI Agent Custom cho app của bạn
 
+> **Status: proposal / future architecture.** Tài liệu này mô tả hướng sản phẩm mong muốn cho AI gateway/router sidecar. Runtime hiện tại của app vẫn là local CLI orchestrator: agent/workflow runs spawn provider CLIs directly, chưa bundle hoặc quản lý 9Router/CLIProxyAPI sidecar, chưa expose local `/v1` endpoint, và OAuth/device flow vẫn là manual/open-external. Xem `docs/unfinished-features.md#r1--9routercliproxyapi-sidecar-moi-la-proposal-chua-duoc-dong-goi-hoac-chay-trong-app` để phân biệt trạng thái hiện tại với kiến trúc tương lai.
+
 **Làm được.** Hướng đúng là biến app thành một **command center cho các nhân viên AI**, UI nhìn như game chiến thuật nhưng vẫn là công cụ làm việc thật. 9Router hoặc CLIProxyAPI chỉ nên là lớp **AI Gateway** nằm bên dưới; phần 3D UI, Projects, Tasks, Agents, mission board và agent builder là sản phẩm riêng của bạn.
 
 ## Ý tưởng sản phẩm

@@ -1025,6 +1025,14 @@
   border-color: rgba(251, 113, 133, 0.24);
 }
 
+/* Failed is amber, not red: it exhausted its retries but is recoverable with
+   one button, unlike a blocked task waiting on the user to fix something. */
+.status-orange {
+  color: #fed7aa;
+  background: rgba(251, 146, 60, 0.13);
+  border-color: rgba(251, 146, 60, 0.26);
+}
+
 .status-green {
   color: #bbf7d0;
   background: rgba(110, 231, 152, 0.13);
@@ -1195,6 +1203,25 @@
   color: #f7f3ff;
   font-size: 12px;
   font-weight: 650;
+}
+
+.task-retry-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(251, 146, 60, 0.24);
+  background: rgba(251, 146, 60, 0.09);
+  color: var(--t-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.task-retry-note strong {
+  display: block;
+  color: #fed7aa;
 }
 
 .task-parent-link {
@@ -1870,6 +1897,12 @@
   background: rgba(251, 113, 133, 0.12);
   border-color: rgba(251, 113, 133, 0.24);
   color: #fecdd4;
+}
+
+.status-orange {
+  background: rgba(251, 146, 60, 0.13);
+  border-color: rgba(251, 146, 60, 0.26);
+  color: #fed7aa;
 }
 
 .priority-medium,

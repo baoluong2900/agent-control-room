@@ -4,7 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readGitDiff } from "../src/main/git/git-service.ts";
+import {
+  commitGitChanges,
+  readGitDiff,
+  readGitFileDiff,
+  readGitLog,
+  stageGitFile,
+  unstageGitFile,
+} from "../src/main/git/git-service.ts";
 
 function tempDir(label: string): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `agentic-${label}-`)));
@@ -152,4 +159,61 @@ test("a detached HEAD is labelled instead of shown as empty", async () => {
 
   assert.equal(summary.isRepository, true);
   assert.equal(summary.branch, "detached HEAD");
+});
+
+test("file diff returns staged, unstaged, and untracked patches", async () => {
+  const dir = initRepo("file-diff");
+
+  fs.writeFileSync(path.join(dir, "staged.txt"), "new staged\n");
+  git(dir, ["add", "staged.txt"]);
+  fs.appendFileSync(path.join(dir, "committed.txt"), "dirty\n");
+  fs.writeFileSync(path.join(dir, "untracked.txt"), "loose\n");
+
+  const staged = await readGitFileDiff(dir, "staged.txt", true);
+  const unstaged = await readGitFileDiff(dir, "committed.txt", false);
+  const untracked = await readGitFileDiff(dir, "untracked.txt", false);
+
+  assert.match(staged.patch, /new staged/);
+  assert.match(unstaged.patch, /dirty/);
+  assert.match(untracked.patch, /new file mode/);
+  assert.match(untracked.patch, /\+loose/);
+});
+
+test("stage and unstage update the working tree summary", async () => {
+  const dir = initRepo("stage-unstage");
+  fs.appendFileSync(path.join(dir, "committed.txt"), "change\n");
+
+  const staged = await stageGitFile(dir, "committed.txt");
+  assert.equal(staged.ok, true);
+  assert.equal(staged.summary?.stagedCount, 1);
+  assert.equal(staged.summary?.unstagedCount, 0);
+
+  const unstaged = await unstageGitFile(dir, "committed.txt");
+  assert.equal(unstaged.ok, true);
+  assert.equal(unstaged.summary?.stagedCount, 0);
+  assert.equal(unstaged.summary?.unstagedCount, 1);
+});
+
+test("commit creates a new log entry from staged changes", async () => {
+  const dir = initRepo("commit");
+  fs.writeFileSync(path.join(dir, "feature.txt"), "feature\n");
+  git(dir, ["add", "feature.txt"]);
+
+  const result = await commitGitChanges(dir, "add feature");
+  const log = await readGitLog(dir, 2);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.summary?.stagedCount, 0);
+  assert.equal(result.commit?.subject, "add feature");
+  assert.equal(log[0]?.subject, "add feature");
+});
+
+test("git path operations reject parent traversal", async () => {
+  const dir = initRepo("unsafe-path");
+
+  const stage = await stageGitFile(dir, "../outside.txt");
+  const diff = await readGitFileDiff(dir, "../outside.txt");
+
+  assert.equal(stage.ok, false);
+  assert.equal(diff.error, "Invalid repository path");
 });

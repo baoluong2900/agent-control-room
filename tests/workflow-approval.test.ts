@@ -14,8 +14,7 @@ import { WorkflowService } from "../src/main/workflows/workflow-service.ts";
  */
 function freshService(): { service: WorkflowService; repo: WorkflowRepository } {
   const db = new DatabaseSync(":memory:");
-  const repo = new WorkflowRepository(db as never);
-  repo.migrate();
+  const repo = WorkflowRepository.bootstrap(db as never);
   const service = new WorkflowService(
     { workflows: repo, listAgentProfiles: () => [], listProviderConnections: () => [] } as never,
     () => null,

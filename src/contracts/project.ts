@@ -30,3 +30,27 @@ export interface GitDiffSummary {
   /** False when the folder is not a git work tree. */
   isRepository: boolean;
 }
+
+export interface GitFileDiff {
+  cwd: string;
+  path: string;
+  staged: boolean;
+  patch: string;
+  isRepository: boolean;
+  error?: string;
+}
+
+export interface GitCommitSummary {
+  hash: string;
+  shortHash: string;
+  author: string;
+  date: string;
+  subject: string;
+}
+
+export interface GitOperationResult {
+  ok: boolean;
+  message: string;
+  summary?: GitDiffSummary;
+  commit?: GitCommitSummary;
+}

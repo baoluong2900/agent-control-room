@@ -1,4 +1,4 @@
-import { Bot, GitBranch, Globe, KeyRound, ShieldCheck } from "lucide-react";
+import { Bot, GitBranch, Globe, KeyRound, Radio, ShieldCheck } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ProviderConnectionAuthMode, ProviderConnectionProvider } from "@contracts";
 
@@ -13,9 +13,31 @@ export type ProviderCatalogEntry = {
   defaultAccountLabel: string;
   runtimeHint: string;
   icon: LucideIcon;
+  /** Short line under the connect button explaining what the click actually does. */
+  connectHint: string;
+  /** Placeholder shown in the endpoint field, and the value assumed when it is blank. */
+  defaultBaseUrl?: string;
 };
 
+/** Default bind address of `hermes proxy start` (127.0.0.1:8645). */
+export const HERMES_PROXY_DEFAULT_BASE_URL = "http://127.0.0.1:8645/v1";
+
 export const providerCatalog: ProviderCatalogEntry[] = [
+  {
+    provider: "hermes-agent",
+    label: "Hermes Agent",
+    description:
+      "Local OpenAI-compatible proxy from Hermes Agent. It attaches your own OAuth credentials upstream, so every OpenAI-style CLI here can run without a vendor API key.",
+    harness: "Any OpenAI-compatible CLI",
+    authMode: "oauth",
+    authUrl: "https://hermes-agent.nousresearch.com/docs/",
+    accent: "#a78bfa",
+    defaultAccountLabel: "Hermes proxy",
+    runtimeHint: "hermes proxy start",
+    icon: Radio,
+    connectHint: "Run `hermes proxy start` first, then Verify checks the endpoint is answering.",
+    defaultBaseUrl: HERMES_PROXY_DEFAULT_BASE_URL,
+  },
   {
     provider: "openai-codex",
     label: "OpenAI Codex",
@@ -27,6 +49,7 @@ export const providerCatalog: ProviderCatalogEntry[] = [
     defaultAccountLabel: "OpenAI account",
     runtimeHint: "codex",
     icon: Bot,
+    connectHint: "Opens the OpenAI dashboard, then saves the local connection record.",
   },
   {
     provider: "claude-code",
@@ -39,6 +62,7 @@ export const providerCatalog: ProviderCatalogEntry[] = [
     defaultAccountLabel: "Claude account",
     runtimeHint: "claude",
     icon: ShieldCheck,
+    connectHint: "Opens claude.ai, then saves the local connection record.",
   },
   {
     provider: "github-copilot",
@@ -51,6 +75,7 @@ export const providerCatalog: ProviderCatalogEntry[] = [
     defaultAccountLabel: "GitHub account",
     runtimeHint: "copilot",
     icon: GitBranch,
+    connectHint: "Opens the GitHub login page, then saves the local connection record.",
   },
   {
     provider: "kiro",
@@ -59,10 +84,11 @@ export const providerCatalog: ProviderCatalogEntry[] = [
     harness: "Kiro CLI",
     authMode: "device",
     authUrl: "https://kiro.dev/",
-    accent: "#a78bfa",
+    accent: "#c4b5fd",
     defaultAccountLabel: "Kiro account",
     runtimeHint: "kiro",
     icon: Globe,
+    connectHint: "Opens kiro.dev for the device login, then saves the connection record.",
   },
   {
     provider: "custom-api",
@@ -74,6 +100,7 @@ export const providerCatalog: ProviderCatalogEntry[] = [
     defaultAccountLabel: "Custom API key",
     runtimeHint: "custom",
     icon: KeyRound,
+    connectHint: "Stores the key in the local encrypted vault. Nothing is sent anywhere.",
   },
 ];
 
@@ -87,8 +114,18 @@ export function getProviderCatalogEntry(provider: ProviderConnectionProvider): P
  * CLI login and ignore an endpoint override, so offering the field would imply
  * a redirect the app cannot deliver.
  */
-const baseUrlProviders = new Set<ProviderConnectionProvider>(["openai-codex", "claude-code", "custom-api"]);
+const baseUrlProviders = new Set<ProviderConnectionProvider>([
+  "openai-codex",
+  "claude-code",
+  "custom-api",
+  "hermes-agent",
+]);
 
 export function supportsBaseUrl(provider: ProviderConnectionProvider): boolean {
   return baseUrlProviders.has(provider);
+}
+
+/** Providers that need a locally stored secret before they can be saved at all. */
+export function requiresApiKey(provider: ProviderConnectionProvider): boolean {
+  return getProviderCatalogEntry(provider).authMode === "api-key";
 }

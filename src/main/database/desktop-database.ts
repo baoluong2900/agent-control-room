@@ -15,6 +15,7 @@ import type {
   KnowledgeFileInsight,
   KnowledgeLanguageStat,
   KnowledgeSnapshot,
+  KnowledgeTruncationReport,
   AgentRunRecord,
   AgentStatus,
   ProjectSummary,
@@ -26,6 +27,7 @@ import type {
   TaskStatus,
 } from "@contracts";
 import { logRetention, truncateLogMessage } from "./log-retention";
+import { DEFAULT_MAX_ATTEMPTS } from "../tasks/retry-policy";
 import { appMigrations, runMigrations, schemaVersion, type AppliedMigration } from "./migrations";
 import { ensureColumns } from "./sqlite-types";
 import type { SqliteDatabase } from "./sqlite-types";
@@ -110,6 +112,10 @@ type TaskRow = {
   last_run_at: string | null;
   last_run_id: string | null;
   run_count: number | null;
+  attempt_count: number | null;
+  max_attempts: number | null;
+  next_retry_at: string | null;
+  last_error: string | null;
   created_at: string;
   completed_at: string | null;
 };
@@ -128,6 +134,7 @@ type KnowledgeSnapshotRow = {
   filesJson: string;
   graphJson: string;
   agentBrief: string;
+  truncationJson: string | null;
 };
 
 export type TerminalLogRow = {
@@ -186,6 +193,10 @@ const taskSelectColumns = `
   last_run_at,
   last_run_id,
   run_count,
+  attempt_count,
+  max_attempts,
+  next_retry_at,
+  last_error,
   created_at,
   completed_at
 `;
@@ -403,8 +414,8 @@ export class DesktopDatabase {
       .prepare(
         `insert into knowledge_snapshots
           (project_path, project_name, generated_at, total_files, indexed_files, skipped_files, total_bytes, total_lines,
-           languages_json, categories_json, files_json, graph_json, agent_brief)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           languages_json, categories_json, files_json, graph_json, agent_brief, truncation_json)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(project_path) do update set
            project_name = excluded.project_name,
            generated_at = excluded.generated_at,
@@ -417,7 +428,8 @@ export class DesktopDatabase {
            categories_json = excluded.categories_json,
            files_json = excluded.files_json,
            graph_json = excluded.graph_json,
-           agent_brief = excluded.agent_brief`,
+           agent_brief = excluded.agent_brief,
+           truncation_json = excluded.truncation_json`,
       )
       .run(
         snapshot.projectPath,
@@ -433,6 +445,7 @@ export class DesktopDatabase {
         JSON.stringify(snapshot.files),
         JSON.stringify(snapshot.graph),
         snapshot.agentBrief,
+        JSON.stringify(snapshot.truncation ?? null),
       );
   }
 
@@ -452,7 +465,8 @@ export class DesktopDatabase {
            categories_json as categoriesJson,
            files_json as filesJson,
            graph_json as graphJson,
-           agent_brief as agentBrief
+           agent_brief as agentBrief,
+          truncation_json as truncationJson
          from knowledge_snapshots
          where project_path = ?`,
       )
@@ -474,6 +488,7 @@ export class DesktopDatabase {
       files: parseJsonArray<KnowledgeFileInsight>(row.filesJson),
       graph: parseJsonValue<KnowledgeCodeGraph>(row.graphJson, { nodes: [], edges: [] }),
       agentBrief: row.agentBrief,
+      truncation: row.truncationJson ? parseJsonValue<KnowledgeTruncationReport | null>(row.truncationJson, null) ?? undefined : undefined,
     };
   }
 
@@ -582,6 +597,26 @@ export class DesktopDatabase {
     return row?.total ?? 0;
   }
 
+  /**
+   * Read-only database health snapshot for diagnostics. `page_count * page_size`
+   * reflects the real SQLite file footprint (including free pages), while the
+   * terminal row count shows whether agent output is the likely source of
+   * growth. No provider or app state is mutated by collecting this.
+   */
+  databaseHealth(): { schemaVersion: number; sizeBytes: number; terminalLogRows: number } {
+    const pageCount = this.db.prepare("pragma page_count").get() as { page_count?: number } | undefined;
+    const pageSize = this.db.prepare("pragma page_size").get() as { page_size?: number } | undefined;
+    const logs = this.db.prepare("select count(*) as total from terminal_logs").get() as
+      | { total: number | null }
+      | undefined;
+
+    return {
+      schemaVersion: this.schemaVersion(),
+      sizeBytes: Number(pageCount?.page_count ?? 0) * Number(pageSize?.page_size ?? 0),
+      terminalLogRows: Number(logs?.total ?? 0),
+    };
+  }
+
   listTerminalLogs(runId: string, limit = 400): TerminalLogRow[] {
     return this.db
       .prepare(
@@ -666,6 +701,12 @@ export class DesktopDatabase {
     return rows.map(hydrateTask);
   }
 
+  /**
+   * Tasks the scheduler may start now. A task is due when its `due_at` has
+   * passed, its backoff (`next_retry_at`) has elapsed, and it still has attempts
+   * left — the last clause is what stops a hopeless task from being respawned
+   * every tick forever.
+   */
   listDueTasks(nowIso = new Date().toISOString(), limit = 20): TaskRecord[] {
     const rows = this.db
       .prepare(
@@ -675,10 +716,12 @@ export class DesktopDatabase {
            and status = 'open'
            and due_at is not null
            and due_at <= ?
+           and (next_retry_at is null or next_retry_at <= ?)
+           and coalesce(attempt_count, 0) < coalesce(max_attempts, ?)
          order by due_at asc, created_at asc
          limit ?`,
       )
-      .all(nowIso, limit) as TaskRow[];
+      .all(nowIso, nowIso, DEFAULT_MAX_ATTEMPTS, limit) as TaskRow[];
     return rows.map(hydrateTask);
   }
 
@@ -691,15 +734,21 @@ export class DesktopDatabase {
       typeof input.estimatedMinutes === "number" && Number.isFinite(input.estimatedMinutes)
         ? Math.max(1, Math.round(input.estimatedMinutes))
         : null;
+    const maxAttempts =
+      typeof input.maxAttempts === "number" && Number.isFinite(input.maxAttempts)
+        ? Math.max(1, Math.round(input.maxAttempts))
+        : DEFAULT_MAX_ATTEMPTS;
 
     this.db
       .prepare(
         `insert into tasks (
            id, project_id, parent_task_id, title, prompt, status,
            assigned_cli_id, assigned_model, due_at, difficulty, estimated_minutes,
-           automation_enabled, last_run_at, last_run_id, run_count, created_at, completed_at
+           automation_enabled, last_run_at, last_run_id, run_count,
+           attempt_count, max_attempts, next_retry_at, last_error,
+           created_at, completed_at
          )
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, null, 0, ?, ?)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, null, 0, 0, ?, null, null, ?, ?)
          on conflict(id) do update set
            project_id = excluded.project_id,
            parent_task_id = excluded.parent_task_id,
@@ -712,6 +761,7 @@ export class DesktopDatabase {
            difficulty = excluded.difficulty,
            estimated_minutes = excluded.estimated_minutes,
            automation_enabled = excluded.automation_enabled,
+           max_attempts = excluded.max_attempts,
            completed_at = excluded.completed_at`,
       )
       .run(
@@ -727,6 +777,7 @@ export class DesktopDatabase {
         input.difficulty ?? null,
         estimatedMinutes,
         input.automationEnabled ? 1 : 0,
+        maxAttempts,
         now,
         completedAt,
       );
@@ -736,13 +787,110 @@ export class DesktopDatabase {
     return saved;
   }
 
+  /**
+   * Moves a task to a status the user chose. Leaving `failed` or `blocked`
+   * clears the retry bookkeeping: a manual status change is the user saying the
+   * blocking condition is gone, so the next tick must be allowed to start it.
+   */
   setTaskStatus(id: string, status: TaskStatus): TaskRecord {
+    const clearsRetry = status === "open" || status === "done";
     this.db
-      .prepare("update tasks set status = ?, completed_at = ? where id = ?")
-      .run(status, status === "done" ? new Date().toISOString() : null, id);
+      .prepare(
+        `update tasks
+         set status = ?,
+             completed_at = ?,
+             attempt_count = case when ? then 0 else attempt_count end,
+             next_retry_at = case when ? then null else next_retry_at end,
+             last_error = case when ? then null else last_error end
+         where id = ?`,
+      )
+      .run(
+        status,
+        status === "done" ? new Date().toISOString() : null,
+        clearsRetry ? 1 : 0,
+        clearsRetry ? 1 : 0,
+        clearsRetry ? 1 : 0,
+        id,
+      );
     const saved = this.findTask(id);
     if (!saved) throw new Error(`Task ${id} was not found.`);
     return saved;
+  }
+
+  /**
+   * Records a failed attempt: bumps the counter, stores the reason, and either
+   * schedules the next try or parks the task in `failed`. Callers decide the
+   * numbers via `planRetry`; this method only persists them.
+   */
+  recordTaskFailure(input: {
+    id: string;
+    attemptCount: number;
+    status: "open" | "failed";
+    nextRetryAt: string | null;
+    lastError: string;
+  }): TaskRecord | null {
+    this.db
+      .prepare(
+        `update tasks
+         set status = ?,
+             completed_at = null,
+             attempt_count = ?,
+             next_retry_at = ?,
+             last_error = ?
+         where id = ?`,
+      )
+      .run(input.status, input.attemptCount, input.nextRetryAt, input.lastError, input.id);
+    return this.getTask(input.id);
+  }
+
+  /**
+   * Clears the attempt budget and backoff so a parked task runs on the next
+   * tick. Backs the "Retry now" button; a task with no `due_at` gets one, since
+   * `listDueTasks` ignores rows that were never scheduled.
+   */
+  resetTaskRetries(id: string): TaskRecord | null {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `update tasks
+         set status = 'open',
+             completed_at = null,
+             attempt_count = 0,
+             next_retry_at = null,
+             last_error = null,
+             due_at = coalesce(due_at, ?)
+         where id = ?`,
+      )
+      .run(now, id);
+    return this.getTask(id);
+  }
+
+  /**
+   * Tasks that have been `investigating` since before `cutoff`, newest run
+   * first. The scheduler pairs each with its run output to decide whether the
+   * agent is hung or merely slow.
+   */
+  listStalledTaskCandidates(cutoffIso: string): TaskRecord[] {
+    const rows = this.db
+      .prepare(
+        `select ${taskSelectColumns}
+         from tasks
+         where status = 'investigating'
+           and last_run_at is not null
+           and last_run_at <= ?
+         order by last_run_at asc
+         limit 20`,
+      )
+      .all(cutoffIso) as TaskRow[];
+    return rows.map(hydrateTask);
+  }
+
+  /** Timestamp of the newest terminal log line for a run, or null when silent. */
+  lastTerminalLogAt(runId: string): string | null {
+    const row = this.db
+      .prepare("select created_at as createdAt from terminal_logs where run_id = ? order by id desc limit 1")
+      .get(runId) as { createdAt: string } | undefined;
+    return row?.createdAt ?? null;
   }
 
   markTaskRunStarted(id: string, runId: string): TaskRecord {
@@ -763,18 +911,27 @@ export class DesktopDatabase {
     return saved;
   }
 
+  /**
+   * Settles a task whose agent run ended. A completed run clears the retry
+   * bookkeeping; anything else is a real failure, so it becomes `failed` (not
+   * `blocked`) and keeps its counters for the scheduler to act on.
+   */
   finishTaskRun(id: string, status: AgentStatus, runId: string): TaskRecord | null {
-    const taskStatus: TaskStatus = status === "completed" ? "done" : "blocked";
-    const completedAt = taskStatus === "done" ? new Date().toISOString() : null;
+    const taskStatus: TaskStatus = status === "completed" ? "done" : "failed";
+    const succeeded = taskStatus === "done";
+    const completedAt = succeeded ? new Date().toISOString() : null;
     this.db
       .prepare(
         `update tasks
          set status = ?,
              completed_at = ?,
-             last_run_id = ?
+             last_run_id = ?,
+             attempt_count = case when ? then 0 else attempt_count end,
+             next_retry_at = case when ? then null else next_retry_at end,
+             last_error = case when ? then null else last_error end
          where id = ?`,
       )
-      .run(taskStatus, completedAt, runId, id);
+      .run(taskStatus, completedAt, runId, succeeded ? 1 : 0, succeeded ? 1 : 0, succeeded ? 1 : 0, id);
     return this.getTask(id);
   }
 
@@ -1120,6 +1277,10 @@ export class DesktopDatabase {
         last_run_at text,
         last_run_id text,
         run_count integer not null default 0,
+        attempt_count integer not null default 0,
+        max_attempts integer not null default 3,
+        next_retry_at text,
+        last_error text,
         created_at text not null default current_timestamp,
         completed_at text
       );
@@ -1185,7 +1346,8 @@ export class DesktopDatabase {
         categories_json text not null,
         files_json text not null,
         graph_json text not null,
-        agent_brief text not null
+        agent_brief text not null,
+        truncation_json text
       );
     `);
 
@@ -1217,6 +1379,11 @@ export class DesktopDatabase {
 
     // Versioned steps run last, so they can assume every legacy table exists.
     this.appliedMigrations = runMigrations(this.db, appMigrations);
+
+    // Seeding is deliberately after the migrations: the starter rows write
+    // columns that versioned steps add, so seeding earlier would fail on a
+    // fresh database.
+    this.workflows.seed();
   }
 
   /** Highest recorded schema version; 0 for a database that predates versioning. */
@@ -1254,6 +1421,10 @@ function hydrateTask(row: TaskRow): TaskRecord {
     lastRunAt: row.last_run_at,
     lastRunId: row.last_run_id,
     runCount: row.run_count ?? 0,
+    attemptCount: row.attempt_count ?? 0,
+    maxAttempts: row.max_attempts ?? DEFAULT_MAX_ATTEMPTS,
+    nextRetryAt: row.next_retry_at,
+    lastError: row.last_error,
     createdAt: row.created_at,
     completedAt: row.completed_at,
   };

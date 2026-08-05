@@ -62,37 +62,6 @@ function ringRadius(count: number): number {
   return 8.4;
 }
 
-/** Base signage heights cycle so no two neighbouring pods label at the same altitude. */
-const SIGNAGE_HEIGHTS = [2.3, 3.05, 2.66];
-
-/**
- * Labels sit beside the pod, never over it. The isometric camera lifts points
- * toward -x-z, so back-ring pods already project near the top of the panel:
- * their badges pull in and drop down to stay inside the frame, while front-ring
- * pods push further out and sit lower so the badge lands on the deck ahead of
- * the robot instead of across its chest.
- */
-function signageOffset(index: number, count: number): [number, number, number] {
-  const [x, , z] = podPosition(index, count);
-  const radius = ringRadius(count);
-  const length = Math.hypot(x, z) || 1;
-  // -1 at the front of the ring, +1 at the back, in screen-vertical terms.
-  const rise = clamp(-(x + z) / (radius * Math.SQRT2), -1, 1);
-  const back = Math.max(0, rise);
-  const front = Math.max(0, -rise);
-  // Side pods (rise ~ 0) project almost straight sideways, so their badge lands on
-  // the monitor panel unless it is pushed clear. The extra shove tapers to zero at
-  // both extremes: front pods are already clear, and nudging back pods outward
-  // would raise them into the top edge of the panel again.
-  const push = 1.7 - 0.55 * back + 0.45 * front + 0.34 * (1 - Math.abs(rise));
-  const height = SIGNAGE_HEIGHTS[index % SIGNAGE_HEIGHTS.length] - 0.95 * back - 0.5 * front;
-  return [
-    Number(((x / length) * push).toFixed(3)),
-    Number(height.toFixed(3)),
-    Number(((z / length) * push).toFixed(3)),
-  ];
-}
-
 function podPosition(index: number, count: number): [number, number, number] {
   const radius = ringRadius(count);
   const angle = (Math.PI * 2 * index) / Math.max(count, 1) - Math.PI / 2;
@@ -129,40 +98,39 @@ export function AgentRobotArena({
             alpha: true,
             antialias: true,
             powerPreference: "high-performance",
+            // Required: `verify:agents:ui` proves the scene is not blank via
+            // gl.readPixels(), which reads zeroes once the frame is composited
+            // unless the drawing buffer survives it.
             preserveDrawingBuffer: true,
             toneMapping: THREE.ACESFilmicToneMapping,
             toneMappingExposure: 1.12,
           }}
           orthographic
-          shadows
         >
-          <fog attach="fog" args={["#070815", 26, 50]} />
+          <ContextLossGuard />
+          <fog attach="fog" args={["#070815", 30, 58]} />
           <CameraFit radius={ringRadius(Math.max(count, 1)) + 2.2} zoom={zoom} />
 
-          <ambientLight intensity={0.2} />
-          <hemisphereLight args={["#78B8FF", "#070815", 0.4]} />
-          <directionalLight
-            castShadow
-            intensity={0.9}
-            position={[9, 15, 7]}
-            shadow-mapSize={[1024, 1024]}
-          />
+          <ambientLight intensity={0.34} />
+          <hemisphereLight args={[palette.blue, "#070815", 0.55]} />
+          <directionalLight intensity={0.95} position={[9, 15, 7]} />
           <directionalLight color={palette.cyan} intensity={0.28} position={[-9, 9, -7]} />
           <pointLight color={palette.core} distance={16} intensity={0.52} position={[0, 5.2, 0]} />
           <pointLight color={palette.amber} distance={11} intensity={0.18} position={[0, 1.8, 0]} />
+
 
           <Suspense fallback={null}>
             <group position={[0, -0.5, 0]}>
               <Grid
                 args={[40, 40]}
-                cellColor="#163A5E"
+                cellColor="#1d2444"
                 cellSize={1}
                 cellThickness={0.22}
                 fadeDistance={24}
                 fadeStrength={2.4}
                 infiniteGrid
                 position={[0, -1.7, 0]}
-                sectionColor="#2A87D4"
+                sectionColor="#4a6fbf"
                 sectionSize={4}
                 sectionThickness={0.48}
               />
@@ -242,6 +210,39 @@ export function AgentRobotArena({
   );
 }
 
+/**
+ * Electron drops the WebGL context under GPU pressure — two live canvases (this
+ * arena plus the Overview map) make that easy to hit. Without this the canvas
+ * freezes on its last frame forever, which reads as "the fleet stopped working".
+ * Preventing the default on loss lets the browser hand back a fresh context, and
+ * r3f rebuilds the scene graph on restore.
+ */
+function ContextLossGuard() {
+  const gl = useThree((state) => state.gl);
+  const invalidate = useThree((state) => state.invalidate);
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+
+    const onLost = (event: Event) => {
+      event.preventDefault();
+    };
+    const onRestored = () => {
+      invalidate();
+    };
+
+    canvas.addEventListener("webglcontextlost", onLost, false);
+    canvas.addEventListener("webglcontextrestored", onRestored, false);
+
+    return () => {
+      canvas.removeEventListener("webglcontextlost", onLost);
+      canvas.removeEventListener("webglcontextrestored", onRestored);
+    };
+  }, [gl, invalidate]);
+
+  return null;
+}
+
 /** Keeps the whole pod ring inside the panel at any window size (mirrors Overview). */
 function CameraFit({ radius, zoom }: { radius: number; zoom: number }) {
   const camera = useThree((state) => state.camera);
@@ -280,17 +281,17 @@ function ArenaFloorPlate({ count }: { count: number }) {
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
         <circleGeometry args={[radius + 4.6, 6]} />
         <meshStandardMaterial
-          color="#0A1727"
+          color="#0b1024"
           depthWrite={false}
           metalness={0.28}
-          opacity={0.52}
+          opacity={0.82}
           roughness={0.88}
           transparent
         />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[CORE_RADIUS, radius + 3.7, 6]} />
-        <meshBasicMaterial color="#18385F" opacity={0.22} toneMapped={false} transparent />
+        <meshBasicMaterial color="#26305c" opacity={0.22} toneMapped={false} transparent />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[radius - 3.1, radius + 2.2, 6]} />
@@ -362,7 +363,7 @@ function SpokeRoad({ accent, count, index }: { accent: string; count: number; in
     <group position={segment.position} rotation-y={segment.angle}>
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[1.62, segment.span + 0.08]} />
-        <meshStandardMaterial color="#07101C" metalness={0.3} roughness={0.7} />
+        <meshStandardMaterial color="#080a18" metalness={0.3} roughness={0.7} />
       </mesh>
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[1.32, segment.span]} />
@@ -726,29 +727,6 @@ function RobotPod({
       <group rotation-y={STATION_YAW}>
         <RobotUnit accent={accent} index={index} selected={selected} tone={tone} />
       </group>
-
-      <pointLight color={accent} distance={4.2} intensity={1.1} position={[0.2, 1.4, 0.2]} />
-      <pointLight color="#cfd9ff" distance={3.2} intensity={0.36} position={[-0.7, 1.35, -0.5]} />
-
-      <Html
-        center
-        className="zone-signage"
-        position={signageOffset(index, count)}
-        style={{ pointerEvents: "none" }}
-        zIndexRange={[6, 4]}
-      >
-        <span
-          className={`zone-signage-inner ${selected ? "is-selected" : ""} ${
-            tone === "active" || tone === "busy" ? "is-active" : ""
-          }`}
-          style={{ borderColor: `${accent}44` }}
-        >
-          <strong style={{ color: accent }}>{robot.name.toUpperCase()}</strong>
-          <small>
-            {robot.moduleLabel} · {robot.status === "missing" ? "Missing CLI" : statusLabel[robot.status]}
-          </small>
-        </span>
-      </Html>
     </group>
   );
 }
@@ -760,11 +738,11 @@ function PodInterior({ accent, tone }: { accent: string; tone: RobotTone }) {
       {/* back wall with mullions and frosted glass */}
       <mesh position={[0, 0.9, -1.16]} receiveShadow>
         <boxGeometry args={[2.5, 1.8, 0.08]} />
-        <meshStandardMaterial color="#18253A" metalness={0.3} roughness={0.62} />
+        <meshStandardMaterial color="#1a2142" metalness={0.3} roughness={0.62} />
       </mesh>
       <mesh position={[-1.24, 0.9, 0]} receiveShadow>
         <boxGeometry args={[0.08, 1.8, 2.2]} />
-        <meshStandardMaterial color="#132035" metalness={0.3} roughness={0.62} />
+        <meshStandardMaterial color="#151a35" metalness={0.3} roughness={0.62} />
       </mesh>
       <mesh position={[0, 0.9, -1.11]}>
         <boxGeometry args={[2.34, 1.62, 0.03]} />

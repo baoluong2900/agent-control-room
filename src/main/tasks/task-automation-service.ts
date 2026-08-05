@@ -9,6 +9,7 @@ import {
   buildTaskPlan,
   defaultModelForCli,
 } from "./task-planner";
+import { isStalled, planRetry, STALL_SILENCE_MS } from "./retry-policy";
 
 type TaskAutomationOptions = {
   intervalMs?: number;
@@ -66,6 +67,7 @@ export class TaskAutomationService {
     const failed: TaskScheduleTickResult["failed"] = [];
 
     try {
+      failed.push(...(await this.sweepStalledTasks()));
       const dueTasks = this.db.listDueTasks();
       for (const task of dueTasks) {
         if (!task.projectPath) {
@@ -108,12 +110,26 @@ export class TaskAutomationService {
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          // Before the retry policy this branch left the task `open` with a past
+          // `due_at`, so the next tick 30 seconds later spawned it again — for
+          // ever. Every failure now consumes an attempt and earns a backoff.
+          const decision = planRetry({
+            attemptCount: task.attemptCount,
+            maxAttempts: task.maxAttempts,
+            message,
+          });
+          this.db.recordTaskFailure({ id: task.id, ...decision });
           failed.push({ taskId: task.id, title: task.title, message });
           this.emit({
             type: "task:failed",
             taskId: task.id,
             title: task.title,
-            message: `⚠ ${task.title}: ${message}`,
+            message:
+              decision.status === "failed"
+                ? `⚠ ${task.title}: ${message} (gave up after ${decision.attemptCount} attempt${
+                    decision.attemptCount === 1 ? "" : "s"
+                  })`
+                : `⚠ ${task.title}: ${message} (retry ${decision.attemptCount}/${task.maxAttempts} at ${decision.nextRetryAt})`,
           });
         }
       }
@@ -122,6 +138,72 @@ export class TaskAutomationService {
     }
 
     return { started, failed };
+  }
+
+  /**
+   * Manually clears a task's attempt budget and runs the scheduler immediately.
+   * Backs the "Retry now" button on a `failed` card.
+   */
+  async retryTaskNow(taskId: string): Promise<TaskScheduleTickResult> {
+    this.db.resetTaskRetries(taskId);
+    return this.runDueTasks();
+  }
+
+  /**
+   * Fails tasks whose agent stopped producing output.
+   *
+   * The signal is silence, not elapsed time: a large refactor can legitimately
+   * run for hours, and killing it on a wall-clock budget alone would throw away
+   * real work. A run with a fresh terminal log line is alive no matter how long
+   * it has been going; only `MAX_RUN_MS` overrides that.
+   *
+   * `now` and `silenceMs` are injectable so a test can shrink the window instead
+   * of waiting fifteen real minutes.
+   */
+  async sweepStalledTasks(
+    options: { now?: Date; silenceMs?: number } = {},
+  ): Promise<TaskScheduleTickResult["failed"]> {
+    const now = options.now ?? new Date();
+    const silenceMs = options.silenceMs ?? STALL_SILENCE_MS;
+    const reaped: TaskScheduleTickResult["failed"] = [];
+    const cutoff = new Date(now.getTime() - silenceMs).toISOString();
+
+    for (const task of this.db.listStalledTaskCandidates(cutoff)) {
+      // `markTaskRunStarted` flips the task to `investigating` at enqueue time,
+      // so a run still waiting behind the concurrency limit looks exactly like a
+      // hung agent here. A run that has not spawned yet has produced no output
+      // by definition and must not be reaped — the silence window only means
+      // something once a child actually exists.
+      if (task.lastRunId && this.db.getAgentRun(task.lastRunId)?.status === "queued") continue;
+
+      const lastOutputAt = task.lastRunId ? this.db.lastTerminalLogAt(task.lastRunId) : null;
+      if (!isStalled({ startedAt: task.lastRunAt, lastOutputAt, now, silenceMs })) continue;
+
+      // Awaited, not fired-and-forgotten: `stop()` settles the task through
+      // `finishTaskRun`, and a late write would clobber the counters below.
+      if (task.lastRunId) {
+        await this.agentProcessManager.stop(task.lastRunId);
+      }
+
+      const message = `Agent produced no output for ${Math.round(silenceMs / 60_000)} minutes.`;
+      const decision = planRetry({
+        attemptCount: task.attemptCount,
+        maxAttempts: task.maxAttempts,
+        message,
+        now,
+      });
+      this.db.recordTaskFailure({ id: task.id, ...decision });
+      reaped.push({ taskId: task.id, title: task.title, message });
+      this.emit({
+        type: "task:failed",
+        taskId: task.id,
+        title: task.title,
+        runId: task.lastRunId ?? undefined,
+        message: `⚠ ${task.title}: ${message}`,
+      });
+    }
+
+    return reaped;
   }
 
   private emit(event: Omit<TaskEvent, "timestamp">): void {

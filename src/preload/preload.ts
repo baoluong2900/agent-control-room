@@ -22,7 +22,7 @@ import type {
 
 const api: AgenticDesktopApi = {
   system: {
-    diagnostics: () => ipcRenderer.invoke("system:diagnostics"),
+    diagnostics: (projectPath?: string | null) => ipcRenderer.invoke("system:diagnostics", projectPath),
   },
   projects: {
     selectFolder: () => ipcRenderer.invoke("project:select-folder"),
@@ -61,6 +61,7 @@ const api: AgenticDesktopApi = {
     plan: (input: TaskPlanInput) => ipcRenderer.invoke("task:plan", input),
     runDue: () => ipcRenderer.invoke("task:run-due"),
     setStatus: (id: string, status: TaskStatus) => ipcRenderer.invoke("task:set-status", id, status),
+    retryNow: (id: string) => ipcRenderer.invoke("task:retry-now", id),
     remove: (id: string) => ipcRenderer.invoke("task:remove", id),
   },
   workflows: {
@@ -85,6 +86,11 @@ const api: AgenticDesktopApi = {
   },
   git: {
     diff: (cwd: string) => ipcRenderer.invoke("git:diff", cwd),
+    fileDiff: (cwd: string, path: string, staged?: boolean) => ipcRenderer.invoke("git:file-diff", cwd, path, staged),
+    log: (cwd: string, limit?: number) => ipcRenderer.invoke("git:log", cwd, limit),
+    stage: (cwd: string, path: string) => ipcRenderer.invoke("git:stage", cwd, path),
+    unstage: (cwd: string, path: string) => ipcRenderer.invoke("git:unstage", cwd, path),
+    commit: (cwd: string, message: string) => ipcRenderer.invoke("git:commit", cwd, message),
   },
   knowledge: {
     get: (projectPath: string) => ipcRenderer.invoke("knowledge:get", projectPath),

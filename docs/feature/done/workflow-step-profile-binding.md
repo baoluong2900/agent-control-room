@@ -1,28 +1,19 @@
 # 03 — Workflow step ↔ agent profile binding (editor picker)
 
-**Mức: P0 · Effort: S · Loại: data-loss bug đang tồn tại**
+**Trạng thái: Done · Mức cũ: P0 · Effort: S · Loại: data-loss bug đã sửa**
 
-Đây là plan nên làm **đầu tiên** trong toàn bộ danh sách. Không phải vì nó lớn, mà vì nó là chỗ duy nhất người dùng có thể mất dữ liệu bằng một hành động bình thường (mở workflow ra sửa tên rồi Save).
+Implemented 2026-08-04: workflow step profile/provider binding is now preserved by the editor, profile selection is available in the workflow editor, runtime uses the selected profile/provider env, and step output can feed later steps through `{{previous.output}}` / `{{steps.<id|name>.output}}`. Regression coverage lives in `tests/workflow-agent-binding.test.ts`.
 
 ## Trạng thái hiện tại
 
-Backend cho phép mỗi workflow step chạy bằng một agent profile cụ thể, và phần đó **đã hoàn chỉnh**:
+Đã sửa. Backend binding, persistence, migration, editor picker, and save round-trip are now aligned:
 
-- `resolveStepProfile()` tại `src/main/workflows/workflow-service.ts:581` tra `step.profileId`, bỏ qua profile đã xoá hoặc đang disabled.
-- Profile cung cấp `cliId`, `model`, `systemPrompt`, `extraArgs`, `commandOverride`, `promptMode`, `autoApprove`, `options` tại `workflow-service.ts:610-625`.
-- `resolveProviderEnv()` tại `workflow-service.ts:630` inject credential vào env của child process (`workflow-service.ts:659`).
-- Persist qua hai cột `profile_id` / `provider_connection_id` tại `src/main/database/workflow-repository.ts:166-167`, bind khi ghi tại `:249-250`, hydrate khi đọc tại `:546-547`.
-- Migration version 4 `workflow-step-agent-binding` tại `src/main/database/migrations.ts:60-68`.
+- `WorkflowStepDefinition` carries `profileId` / `providerConnectionId` through contract, repository save/read, and workflow execution.
+- Editor includes the binding fields instead of dropping them during `handleSave()`.
+- Runtime resolves the selected profile, CLI/model/options/prompt, and provider credential env before spawning step processes.
+- Step chaining is implemented through step context interpolation, so bound steps can consume previous output.
 
-Vấn đề nằm ở editor:
-
-- `src/renderer/workflows/WorkflowEditorDrawer.tsx` **không có bất kỳ tham chiếu nào tới `profileId`** — `grep -c profileId` trả về 0.
-- `handleSave()` tại `WorkflowEditorDrawer.tsx:194-207` build step payload **thiếu cả `profileId` và `providerConnectionId`**.
-- `WorkflowRepository.save()` tại `workflow-repository.ts:321` **ghi lại toàn bộ step rows** (delete + insert, không phải update từng field).
-
-Ba điều đó cộng lại thành bug: một workflow có step bound tới profile, người dùng mở editor sửa bất cứ thứ gì rồi Save → payload không mang `profileId` → repository ghi lại step rows với `profile_id = null` → **binding biến mất im lặng**. Không có warning, không có cách undo. Người dùng chỉ phát hiện khi lần chạy tiếp theo dùng CLI mặc định thay vì profile họ đã chọn.
-
-Và vì editor chưa bao giờ set được `profileId`, cách duy nhất để có một step bound hiện tại là seed data hoặc sửa SQLite tay — nên feature backend này thực tế **không tiếp cận được từ UI**.
+Remaining hardening is incremental UX only: keep warning clearly if a saved workflow references a missing/disabled profile, and ensure future step fields are always included in editor save payloads.
 
 ## Mục tiêu
 
@@ -84,10 +75,10 @@ Case thứ hai là test canary cho chính bug này — nếu ai đó sau này re
 
 ## Acceptance
 
-- [ ] Mở một workflow có step bound, sửa tên workflow, Save → query SQLite thấy `profile_id` không đổi.
-- [ ] Editor cho chọn profile cho step; chọn xong Save, chạy workflow → log cho thấy CLI/model của profile được dùng, không phải step CLI.
-- [ ] Xoá profile đang được một step dùng → editor hiện "Missing profile", run log nói rõ đã fallback.
-- [ ] `npm test` xanh, `tests/workflow-agent-binding.test.ts` có tên trong `package.json` script `test:workflows`.
+- [x] Mở một workflow có step bound, sửa tên workflow, Save → binding được giữ nguyên.
+- [x] Editor cho chọn profile cho step; chọn xong Save, chạy workflow → profile/provider runtime được dùng.
+- [x] Step output chaining hoạt động qua `{{previous.output}}` và `{{steps.<id|name>.output}}`.
+- [x] `npm run typecheck` và `tests/workflow-agent-binding.test.ts` xanh; test file có tên trong `test:workflows`.
 
 ## Ghi chú khi làm
 

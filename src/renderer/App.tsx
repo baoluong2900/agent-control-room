@@ -13,6 +13,7 @@ import type {
   AgentRunRecord,
   AppIdentity,
   AgentStatus,
+  DiagnosticAction,
   SystemDiagnostics,
   WorkflowActivityEntry,
 } from "@contracts";
@@ -649,7 +650,7 @@ export default function App() {
   async function loadInitialState() {
     try {
       const nextIdentity = await refreshIdentity();
-      await Promise.all([refreshDiagnostics(), refreshHistory(), refreshProjects()]);
+      await Promise.all([refreshDiagnostics(project?.path), refreshHistory(), refreshProjects()]);
       return nextIdentity;
     } catch (error) {
       setBootError(formatBootError(error));
@@ -665,8 +666,8 @@ export default function App() {
     return nextIdentity;
   }
 
-  async function refreshDiagnostics() {
-    const nextDiagnostics = await window.agentic.system.diagnostics();
+  async function refreshDiagnostics(projectPath: string | null | undefined = project?.path) {
+    const nextDiagnostics = await window.agentic.system.diagnostics(projectPath);
     setDiagnostics(nextDiagnostics);
   }
 
@@ -675,7 +676,7 @@ export default function App() {
     setRecentProjects(projects);
     if (!project && projects[0]) {
       setProject(projects[0]);
-      await refreshGitDiff(projects[0].path);
+      await Promise.all([refreshGitDiff(projects[0].path), refreshDiagnostics(projects[0].path)]);
       void ensureKnowledgeSnapshot(projects[0].path);
     }
   }
@@ -698,13 +699,13 @@ export default function App() {
     const nextProject = await window.agentic.projects.selectFolder();
     if (!nextProject) return;
     setProject(nextProject);
-    await Promise.all([refreshProjects(), refreshGitDiff(nextProject.path)]);
+    await Promise.all([refreshProjects(), refreshGitDiff(nextProject.path), refreshDiagnostics(nextProject.path)]);
     void ensureKnowledgeSnapshot(nextProject.path);
   }
 
   async function selectRecentProject(nextProject: NonNullable<typeof project>) {
     setProject(nextProject);
-    await refreshGitDiff(nextProject.path);
+    await Promise.all([refreshGitDiff(nextProject.path), refreshDiagnostics(nextProject.path)]);
   }
 
   /** Forgets a folder from the recent list, clearing selection if it was active. */
@@ -717,7 +718,7 @@ export default function App() {
     setProject(next);
     // Pass null explicitly: the default parameter would fall back to the
     // now-removed project path still held in state.
-    await refreshGitDiff(next?.path ?? null);
+    await Promise.all([refreshGitDiff(next?.path ?? null), refreshDiagnostics(next?.path ?? null)]);
   }
 
   /** Opens the native folder dialog and returns the picked path. */
@@ -725,7 +726,7 @@ export default function App() {
     const nextProject = await window.agentic.projects.selectFolder();
     if (!nextProject) return null;
     setProject(nextProject);
-    await Promise.all([refreshProjects(), refreshGitDiff(nextProject.path)]);
+    await Promise.all([refreshProjects(), refreshGitDiff(nextProject.path), refreshDiagnostics(nextProject.path)]);
     void ensureKnowledgeSnapshot(nextProject.path);
     return nextProject.path;
   }
@@ -773,6 +774,20 @@ export default function App() {
       status: "signed-out",
     });
     setIdentity(signedOut);
+  }
+
+  function handleDiagnosticAction(action: DiagnosticAction) {
+    if (action.target === "settings") {
+      navigate("Settings");
+      return;
+    }
+    if (action.target === "project") {
+      void pickFolder();
+      return;
+    }
+    // Install/docs actions lead to the integrations surface, where each CLI and
+    // provider exposes its concrete documentation and connection controls.
+    navigate("Integrations");
   }
 
   if (!bridgeAvailable) {
@@ -836,6 +851,7 @@ export default function App() {
             diagnostics={diagnostics}
             gitDiff={gitDiff}
             history={history}
+            onDiagnosticAction={handleDiagnosticAction}
             onPickFolder={pickFolder}
             onRefreshGitDiff={() => refreshGitDiff()}
             onRemoveRecent={removeRecentProject}

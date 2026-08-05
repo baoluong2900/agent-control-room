@@ -24,6 +24,7 @@ export type ProviderConnectionProvider =
   | "claude-code"
   | "github-copilot"
   | "kiro"
+  | "hermes-agent"
   | "custom-api";
 
 export type ProviderConnectionStatus = "connected" | "expired" | "disconnected" | "unverified";

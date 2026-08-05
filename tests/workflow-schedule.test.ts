@@ -14,9 +14,8 @@ function freshScheduler(): {
   repo: WorkflowRepository;
 } {
   const db = new DatabaseSync(":memory:");
-  const repo = new WorkflowRepository(db as never);
-  repo.migrate();
-  // migrate() seeds reference workflows, two of which are schedule-triggered — and
+  const repo = WorkflowRepository.bootstrap(db as never);
+  // Bootstrapping seeds reference workflows, two of which are schedule-triggered — and
   // one is active. Leaving them in place would make every tick below spawn their
   // real agent CLIs, so start the scheduler against an empty catalogue.
   for (const seeded of repo.list()) repo.remove(seeded.id);

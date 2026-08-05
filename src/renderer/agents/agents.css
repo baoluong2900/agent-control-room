@@ -545,12 +545,21 @@
   place-items: center;
   width: 34px;
   height: 34px;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 12px;
   font-weight: 620;
-  color: #070815;
-  background: linear-gradient(140deg, var(--cli-accent, var(--a-violet)), color-mix(in srgb, var(--cli-accent, var(--a-violet)) 45%, #f7f3ff));
+  color: var(--cli-accent, var(--a-violet));
+  background:
+    radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--cli-accent, var(--a-violet)) 26%, transparent), transparent 60%),
+    rgba(17, 22, 43, 0.92);
+  border: 1px solid color-mix(in srgb, var(--cli-accent, var(--a-violet)) 46%, transparent);
+  box-shadow: inset 0 1px rgba(247, 243, 255, 0.07), 0 0 16px color-mix(in srgb, var(--cli-accent, var(--a-violet)) 18%, transparent);
   flex-shrink: 0;
+}
+.agent-card-avatar {
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
 }
 
 /* All agents */
@@ -620,14 +629,17 @@
   flex-direction: column;
   gap: 12px;
   border: 1px solid var(--a-border);
-  transition: transform 0.16s ease, border-color 0.16s ease;
-  padding: 13px;
-  border-radius: 8px;
-  background: linear-gradient(165deg, rgba(17, 22, 43, 0.95), rgba(17, 22, 43, 0.92));
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+  padding: 14px;
+  border-radius: 12px;
+  background:
+    radial-gradient(120% 140% at 100% -24%, color-mix(in srgb, var(--cli-accent, var(--a-violet)) 18%, transparent), transparent 56%),
+    linear-gradient(165deg, rgba(17, 22, 43, 0.96), rgba(12, 16, 33, 0.92));
 }
 .agent-card:hover {
   transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--cli-accent) 42%, transparent);
+  border-color: color-mix(in srgb, var(--cli-accent) 52%, transparent);
+  box-shadow: 0 16px 34px rgba(7, 8, 21, 0.28), 0 0 24px color-mix(in srgb, var(--cli-accent) 15%, transparent);
 }
 .agent-card header {
   display: flex;
@@ -2582,9 +2594,12 @@
 .terminal-avatar,
 .activity-avatar,
 .reference-agent-avatar {
-  background: color-mix(in srgb, var(--cli-accent, var(--node-accent, var(--a-violet))) 18%, rgba(17, 22, 43, 0.9));
-  border-color: color-mix(in srgb, var(--cli-accent, var(--node-accent, var(--a-violet))) 42%, transparent);
+  background:
+    radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--cli-accent, var(--node-accent, var(--a-violet))) 26%, transparent), transparent 60%),
+    rgba(17, 22, 43, 0.92);
+  border-color: color-mix(in srgb, var(--cli-accent, var(--node-accent, var(--a-violet))) 46%, transparent);
   color: var(--cli-accent, var(--node-accent, var(--a-violet)));
+  box-shadow: inset 0 1px rgba(247, 243, 255, 0.07), 0 0 16px color-mix(in srgb, var(--cli-accent, var(--node-accent, var(--a-violet))) 18%, transparent);
 }
 .agent-fleet-status,
 .state-pill,
@@ -2715,6 +2730,12 @@
     radial-gradient(circle at 88% -10%, rgba(244, 114, 182, 0.12), transparent 16rem),
     linear-gradient(145deg, rgba(17, 22, 43, 0.9), rgba(17, 22, 43, 0.84));
 }
+.agent-card {
+  background:
+    radial-gradient(120% 140% at 100% -24%, color-mix(in srgb, var(--cli-accent, var(--a-violet)) 18%, transparent), transparent 56%),
+    linear-gradient(165deg, rgba(17, 22, 43, 0.96), rgba(12, 16, 33, 0.92));
+  border-radius: 12px;
+}
 .agents-page .ghost-button,
 .agents-page .icon-button,
 .agent-notification-button,
@@ -2804,17 +2825,16 @@
   position: absolute;
   inset: 0 0 122px;
   background:
-    radial-gradient(circle at 50% 46%, rgba(54, 144, 255, 0.16), transparent 23%),
-    radial-gradient(circle at 25% 42%, rgba(49, 210, 238, 0.11), transparent 24%),
-    radial-gradient(circle at 77% 34%, rgba(164, 107, 255, 0.12), transparent 25%),
-    radial-gradient(circle at 60% 78%, rgba(255, 137, 69, 0.08), transparent 21%);
+    radial-gradient(circle at 50% 46%, rgba(96, 165, 250, 0.1), transparent 26%),
+    radial-gradient(circle at 26% 40%, rgba(103, 232, 249, 0.07), transparent 26%),
+    radial-gradient(circle at 76% 34%, rgba(167, 139, 250, 0.08), transparent 27%);
   pointer-events: none;
   z-index: 0;
 }
 .agent-robot-vignette {
   position: absolute;
   inset: 0 0 122px;
-  background: radial-gradient(ellipse at center, transparent 46%, rgba(7, 8, 21, 0.42) 80%, rgba(7, 8, 21, 0.74) 100%);
+  background: radial-gradient(ellipse at center, transparent 58%, rgba(7, 8, 21, 0.3) 86%, rgba(7, 8, 21, 0.55) 100%);
   pointer-events: none;
   z-index: 3;
 }

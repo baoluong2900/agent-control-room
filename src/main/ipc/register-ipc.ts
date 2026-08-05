@@ -18,7 +18,14 @@ import type {
 import { listAgentCatalog } from "../agents/catalog";
 import { pingAgentCli, pingAllAgentClis, probeAgentModels } from "../agents/probe";
 import type { DesktopDatabase } from "../database/desktop-database";
-import { readGitDiff } from "../git/git-service";
+import {
+  commitGitChanges,
+  readGitDiff,
+  readGitFileDiff,
+  readGitLog,
+  stageGitFile,
+  unstageGitFile,
+} from "../git/git-service";
 import type { KnowledgeService } from "../knowledge/knowledge-service";
 import { AgentProcessManager } from "../processes/agent-process-manager";
 import { ProjectService } from "../projects/project-service";
@@ -47,7 +54,9 @@ export function registerIpcHandlers({
   workflowSchedulerService: WorkflowSchedulerService;
   workflowService: WorkflowService;
 }): void {
-  ipcMain.handle("system:diagnostics", () => collectDiagnostics());
+  ipcMain.handle("system:diagnostics", (_event, projectPath?: string | null) =>
+    collectDiagnostics(database, settingsService, projectPath),
+  );
 
   ipcMain.handle("project:select-folder", () => projectService.selectFolder());
   ipcMain.handle("project:list-recent", () => projectService.listRecent());
@@ -93,6 +102,7 @@ export function registerIpcHandlers({
   ipcMain.handle("task:plan", (_event, input: TaskPlanInput) => taskAutomationService.planTask(input));
   ipcMain.handle("task:run-due", () => taskAutomationService.runDueTasks());
   ipcMain.handle("task:set-status", (_event, id: string, status: TaskStatus) => database.setTaskStatus(id, status));
+  ipcMain.handle("task:retry-now", (_event, id: string) => taskAutomationService.retryTaskNow(id));
   ipcMain.handle("task:remove", (_event, id: string) => database.deleteTask(id));
 
   ipcMain.handle("workflow:list", () => workflowService.list());
@@ -122,6 +132,13 @@ export function registerIpcHandlers({
   ipcMain.handle("workflow:import", () => workflowService.importDefinition());
 
   ipcMain.handle("git:diff", (_event, cwd: string) => readGitDiff(cwd));
+  ipcMain.handle("git:file-diff", (_event, cwd: string, filePath: string, staged?: boolean) =>
+    readGitFileDiff(cwd, filePath, staged),
+  );
+  ipcMain.handle("git:log", (_event, cwd: string, limit?: number) => readGitLog(cwd, limit));
+  ipcMain.handle("git:stage", (_event, cwd: string, filePath: string) => stageGitFile(cwd, filePath));
+  ipcMain.handle("git:unstage", (_event, cwd: string, filePath: string) => unstageGitFile(cwd, filePath));
+  ipcMain.handle("git:commit", (_event, cwd: string, message: string) => commitGitChanges(cwd, message));
 
   ipcMain.handle("knowledge:get", (_event, projectPath: string) => knowledgeService.get(projectPath));
   ipcMain.handle("knowledge:scan", (_event, input: KnowledgeScanInput) => knowledgeService.scan(input));

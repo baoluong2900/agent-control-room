@@ -132,3 +132,71 @@ async function waitFor(events: AgentEvent[], predicate: (event: AgentEvent) => b
   }
   return null;
 }
+
+test("openai-compatible CLIs fall back to the hermes gateway before a custom endpoint", () => {
+  const now = new Date().toISOString();
+  const base = {
+    userId: "user-1",
+    storageMode: "local" as const,
+    status: "connected" as const,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const hermes = { ...base, id: "hermes-1", provider: "hermes-agent" as const, authMode: "oauth" as const };
+  const custom = { ...base, id: "custom-1", provider: "custom-api" as const, authMode: "api-key" as const };
+  const codexNative = { ...base, id: "codex-1", provider: "openai-codex" as const, authMode: "oauth" as const };
+
+  // A CLI's own vendor connection still wins when one exists.
+  assert.equal(selectProviderConnection("codex", [hermes, codexNative])?.id, "codex-1");
+  // Without one, the local proxy is preferred over a hand-typed endpoint.
+  assert.equal(selectProviderConnection("codex", [custom, hermes])?.id, "hermes-1");
+  assert.equal(selectProviderConnection("aider", [custom, hermes])?.id, "hermes-1");
+  assert.equal(selectProviderConnection("aider", [custom])?.id, "custom-1");
+  // Claude Code does not speak the OpenAI wire format, so the gateway is not offered.
+  assert.equal(selectProviderConnection("claude", [hermes]), null);
+});
+
+test("a hermes-agent connection routes CLIs at the local proxy without a stored key", () => {
+  const now = new Date().toISOString();
+  const env = buildProviderRuntimeEnv({
+    connection: {
+      id: "hermes-1",
+      userId: "user-1",
+      provider: "hermes-agent",
+      authMode: "oauth",
+      storageMode: "local",
+      status: "connected",
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+
+  assert.equal(env.OPENAI_BASE_URL, "http://127.0.0.1:8645/v1");
+  assert.equal(env.OPENAI_API_BASE, "http://127.0.0.1:8645/v1");
+  // The proxy attaches the real credential upstream, but the OpenAI SDK inside
+  // each CLI refuses to start with an empty key, so a placeholder is supplied.
+  assert.ok(env.OPENAI_API_KEY, "a bearer is always present");
+  assert.equal(env.AGENTIC_PROVIDER, "hermes-agent");
+});
+
+test("an explicit hermes-agent endpoint overrides the default proxy address", () => {
+  const now = new Date().toISOString();
+  const env = buildProviderRuntimeEnv({
+    connection: {
+      id: "hermes-2",
+      userId: "user-1",
+      provider: "hermes-agent",
+      authMode: "oauth",
+      storageMode: "local",
+      status: "connected",
+      baseUrl: "http://127.0.0.1:7777/v1",
+      createdAt: now,
+      updatedAt: now,
+    },
+    secret: "sk-explicit",
+  });
+
+  assert.equal(env.OPENAI_BASE_URL, "http://127.0.0.1:7777/v1");
+  assert.equal(env.OPENAI_API_KEY, "sk-explicit");
+  assert.equal(env.HERMES_PROXY_API_KEY, "sk-explicit");
+});

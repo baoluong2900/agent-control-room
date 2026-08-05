@@ -211,3 +211,68 @@ test("a pre-upgrade database gains the new columns without losing its rows", asy
 
   db.close();
 });
+
+test("a legacy database with no schema_migrations gains every workflow column and keeps its seeds stable", async () => {
+  const dir = tempDir("legacy-workflow-columns");
+  fs.mkdirSync(dir, { recursive: true });
+  const sqlite = await import("node:sqlite");
+
+  // Deliberately the oldest shape: the workflow tables exist with their original
+  // four/five columns and nothing else, and there is no schema_migrations table
+  // at all. Additive migrations pass trivially on a fresh database, so this is
+  // the case that actually exercises them.
+  const legacy = new sqlite.DatabaseSync(path.join(dir, "agentic-workspace.sqlite"));
+  legacy.exec(`
+    create table workflows (
+      id text primary key, name text not null, project_id text,
+      created_at text not null default current_timestamp
+    );
+    create table workflow_steps (
+      id text primary key, workflow_id text not null, agent_cli_id text not null,
+      step_order integer not null, prompt_template text not null
+    );
+    insert into workflows (id, name, created_at) values ('old-wf','Ancient WF','2024-05-01');
+    insert into workflow_steps values ('old-step','old-wf','codex',1,'inspect the thing');
+  `);
+  const tableNames = (legacy.prepare("select name from sqlite_master where type = 'table'").all() as Array<{
+    name: string;
+  }>).map((row) => row.name);
+  assert.equal(tableNames.includes("schema_migrations"), false, "the fixture must predate versioning");
+  legacy.close();
+
+  const db = await DesktopDatabase.open(dir);
+  assert.equal(db.schemaVersion(), latestVersion);
+
+  const columnsOf = (table: string) =>
+    new Set(
+      (db.workflows as unknown as { db: SqliteDatabase }).db
+        .prepare(`pragma table_info(${table})`)
+        .all()
+        .map((row) => (row as { name: string }).name),
+    );
+
+  const workflowColumns = columnsOf("workflows");
+  for (const column of ["description", "status", "favorite", "owner", "trigger_type", "updated_at"]) {
+    assert.ok(workflowColumns.has(column), `workflows.${column} must exist after the upgrade`);
+  }
+
+  const stepColumns = columnsOf("workflow_steps");
+  for (const column of ["name", "kind", "model", "profile_id", "provider_connection_id", "enabled"]) {
+    assert.ok(stepColumns.has(column), `workflow_steps.${column} must exist after the upgrade`);
+  }
+
+  // The pre-existing workflow is preserved, and because the database was not
+  // empty the seeds are skipped rather than dumped on top of the user's data.
+  const preserved = db.workflows.get("old-wf");
+  assert.equal(preserved?.name, "Ancient WF");
+  assert.equal(preserved?.steps[0].instruction, "inspect the thing");
+  const afterFirstOpen = db.workflows.list().length;
+  db.close();
+
+  // Reopening must be a no-op: no migration reruns, no duplicated seeds.
+  const reopened = await DesktopDatabase.open(dir);
+  assert.deepEqual(reopened.migrationsAppliedOnOpen(), []);
+  assert.equal(reopened.workflows.list().length, afterFirstOpen);
+  assert.deepEqual(appliedVersions((reopened.workflows as unknown as { db: SqliteDatabase }).db), appMigrations.map((m) => m.version));
+  reopened.close();
+});

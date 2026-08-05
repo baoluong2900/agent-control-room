@@ -3,7 +3,6 @@ import {
   Braces,
   Copy,
   DatabaseZap,
-  Download,
   FileCode2,
   FileJson,
   FileText,
@@ -48,6 +47,8 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
   const [scanning, setScanning] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scanMaxFiles, setScanMaxFiles] = useState(1_200);
+  const [scanMaxFileBytes, setScanMaxFileBytes] = useState(220_000);
 
   useEffect(() => {
     let mounted = true;
@@ -104,9 +105,9 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
     return snapshot.files.find((file) => file.path === selectedPath) ?? filteredFiles[0] ?? snapshot.files[0] ?? null;
   }, [filteredFiles, selectedPath, snapshot]);
 
-  async function scanProject() {
-    let projectPath = project?.path ?? null;
-    if (!project) {
+  async function scanProject(options?: { projectPath?: string; maxFiles?: number; maxFileBytes?: number }) {
+    let projectPath = options?.projectPath ?? project?.path ?? null;
+    if (!projectPath) {
       const pickedPath = await onPickFolder();
       if (!pickedPath) return;
       projectPath = pickedPath;
@@ -120,17 +121,29 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
     try {
       const next = await window.agentic.knowledge.scan({
         projectPath,
-        maxFiles: 1_200,
-        maxFileBytes: 220_000,
+        maxFiles: options?.maxFiles ?? scanMaxFiles,
+        maxFileBytes: options?.maxFileBytes ?? scanMaxFileBytes,
       });
       setSnapshot(next);
       setSelectedPath(next.files[0]?.path ?? null);
-      setNotice(`CodeGraph indexed ${next.indexedFiles} files.`);
+      setNotice(
+        next.truncation
+          ? `CodeGraph indexed ${next.indexedFiles} files; skipped ${next.skippedFiles}.`
+          : `CodeGraph indexed ${next.indexedFiles} files.`,
+      );
     } catch (nextError) {
       setError(formatError(nextError));
     } finally {
       setScanning(false);
     }
+  }
+
+  async function boostCapsAndRescan() {
+    const nextMaxFiles = Math.min(5_000, Math.max(scanMaxFiles + 200, Math.ceil(scanMaxFiles * 1.5)));
+    const nextMaxFileBytes = Math.min(1_000_000, Math.max(scanMaxFileBytes + 20_000, Math.ceil(scanMaxFileBytes * 1.25)));
+    setScanMaxFiles(nextMaxFiles);
+    setScanMaxFileBytes(nextMaxFileBytes);
+    await scanProject({ maxFiles: nextMaxFiles, maxFileBytes: nextMaxFileBytes });
   }
 
   async function exportSnapshot(format: KnowledgeExportFormat, copyOnly = false) {
@@ -192,6 +205,8 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
         <KnowledgeStat icon={<FileCode2 size={17} />} label="Source Size" value={snapshot ? formatBytes(snapshot.totalBytes) : "0 B"} tone="amber" />
       </section>
 
+      {snapshot?.truncation && <TruncationSummary snapshot={snapshot} onBoostCaps={() => void boostCapsAndRescan()} />}
+
       {!project ? (
         <section className="knowledge-empty">
           <FolderOpen size={28} />
@@ -217,6 +232,13 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
               <h2>Categories</h2>
               <small>{snapshot ? formatRelative(snapshot.generatedAt) : "Loading"}</small>
             </header>
+            {snapshot?.truncation && (
+              <p className="knowledge-truncation-note">
+                {snapshot.truncation.hitFileLimit
+                  ? `Indexed ${snapshot.indexedFiles} files and hit the file limit.`
+                  : `Indexed ${snapshot.indexedFiles} files with truncation details available.`}
+              </p>
+            )}
             <div className="knowledge-category-list">
               <button className={category === "all" ? "selected" : ""} onClick={() => setCategory("all")}>
                 <span>All Source</span>
@@ -315,6 +337,85 @@ function KnowledgeStat({
       <strong>{value}</strong>
       <small>{label}</small>
     </article>
+  );
+}
+
+function TruncationSummary({
+  snapshot,
+  onBoostCaps,
+}: {
+  snapshot: KnowledgeSnapshot;
+  onBoostCaps: () => void;
+}) {
+  if (!snapshot.truncation) return null;
+
+  const report = snapshot.truncation;
+  const largest = report.largestSkipped ?? [];
+
+  return (
+    <section className="knowledge-truncation-panel">
+      <header>
+        <DatabaseZap size={17} />
+        <h2>Truncation Report</h2>
+      </header>
+      <dl className="knowledge-truncation-grid">
+        <div>
+          <dt>Hit file limit</dt>
+          <dd>{report.hitFileLimit ? "Yes" : "No"}</dd>
+        </div>
+        <div>
+          <dt>Files seen</dt>
+          <dd>{report.filesSeen}</dd>
+        </div>
+        <div>
+          <dt>Indexed</dt>
+          <dd>{report.filesIndexed}</dd>
+        </div>
+        <div>
+          <dt>Unsupported</dt>
+          <dd>{report.skippedUnsupported}</dd>
+        </div>
+        <div>
+          <dt>Too large</dt>
+          <dd>{report.skippedTooLarge}</dd>
+        </div>
+        <div>
+          <dt>Binary</dt>
+          <dd>{report.skippedBinary}</dd>
+        </div>
+        <div>
+          <dt>Unreadable</dt>
+          <dd>{report.skippedUnreadable}</dd>
+        </div>
+        <div>
+          <dt>Nodes dropped</dt>
+          <dd>{report.graphNodesDropped}</dd>
+        </div>
+        <div>
+          <dt>Edges dropped</dt>
+          <dd>{report.graphEdgesDropped}</dd>
+        </div>
+      </dl>
+      {largest.length > 0 && (
+        <section className="knowledge-truncation-largest">
+          <h3>Largest skipped</h3>
+          <ul>
+            {largest.map((item) => (
+              <li key={item.path}>
+                <span>{item.path}</span>
+                <em>{formatBytes(item.bytes)}</em>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {report.hitFileLimit && (
+        <button className="knowledge-copy-button" onClick={onBoostCaps}>
+          <RefreshCw size={14} />
+          Increase caps and rescan
+        </button>
+      )}
+    </section>
   );
 }
 

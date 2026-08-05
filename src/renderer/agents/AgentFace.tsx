@@ -14,21 +14,21 @@ export type AgentFaceSize = "sm" | "md" | "lg";
 
 /** Mirrors `main/agents/catalog.ts` accents so faces are coloured pre-catalog. */
 const fallbackAccent: Record<AgentCliId, string> = {
-  kiro: "#8b5cf6",
-  agy: "#38bdf8",
-  grok: "#f97316",
-  claude: "#f59e0b",
-  codex: "#22d3ee",
+  kiro: "#a78bfa",
+  agy: "#7dd3fc",
+  grok: "#fdba9b",
+  claude: "#fbbf24",
+  codex: "#67e8f9",
   gemini: "#60a5fa",
-  amazonq: "#a78bfa",
-  aider: "#34d399",
+  amazonq: "#c4b5fd",
+  aider: "#86efac",
   opencode: "#f472b6",
   cursor: "#93c5fd",
-  copilot: "#e879f9",
-  qwen: "#fbbf24",
-  ollama: "#67e8f9",
-  shell: "#94a3b8",
-  custom: "#c4b5fd",
+  copilot: "#f0abfc",
+  qwen: "#fcd34d",
+  ollama: "#a5f3fc",
+  shell: "#afa8c7",
+  custom: "#d8b4fe",
 };
 
 const facePixels: Record<AgentFaceSize, number> = { sm: 26, md: 34, lg: 44 };
@@ -66,9 +66,10 @@ export function AgentFace({
     >
       {title && <title>{title}</title>}
 
-      {/* Chassis: neck, head shell, visor well. */}
+      {/* Chassis: neck, head shell, top gloss, visor well, jaw. */}
       <rect className="face-neck" x="18" y="32" width="8" height="5" rx="2.4" />
       <rect className="face-shell" x="7" y="7" width="30" height="27" rx="9.5" />
+      <rect className="face-gloss" x="10.5" y="9" width="23" height="4.2" rx="2.1" />
       <rect className="face-visor" x="11" y="13.5" width="22" height="11.5" rx="5" />
       <rect className="face-mouth" x="17.5" y="27.5" width="9" height="2.4" rx="1.2" />
 

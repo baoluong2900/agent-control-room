@@ -11,7 +11,7 @@ import type {
   AgentRunRecord,
   AgentSessionSummary,
 } from "./agent";
-import type { GitDiffSummary, ProjectSummary } from "./project";
+import type { GitCommitSummary, GitDiffSummary, GitFileDiff, GitOperationResult, ProjectSummary } from "./project";
 import type { KnowledgeExportFormat, KnowledgeExportResult, KnowledgeScanInput, KnowledgeSnapshot } from "./knowledge";
 import type {
   AppIdentity,
@@ -46,7 +46,7 @@ import type {
 
 export interface AgenticDesktopApi {
   system: {
-    diagnostics: () => Promise<SystemDiagnostics>;
+    diagnostics: (projectPath?: string | null) => Promise<SystemDiagnostics>;
   };
   projects: {
     selectFolder: () => Promise<ProjectSummary | null>;
@@ -84,6 +84,7 @@ export interface AgenticDesktopApi {
     plan: (input: TaskPlanInput) => Promise<TaskPlanResult>;
     runDue: () => Promise<TaskScheduleTickResult>;
     setStatus: (id: string, status: TaskStatus) => Promise<TaskRecord>;
+    retryNow: (id: string) => Promise<TaskScheduleTickResult>;
     remove: (id: string) => Promise<void>;
   };
   workflows: {
@@ -108,6 +109,11 @@ export interface AgenticDesktopApi {
   };
   git: {
     diff: (cwd: string) => Promise<GitDiffSummary>;
+    fileDiff: (cwd: string, path: string, staged?: boolean) => Promise<GitFileDiff>;
+    log: (cwd: string, limit?: number) => Promise<GitCommitSummary[]>;
+    stage: (cwd: string, path: string) => Promise<GitOperationResult>;
+    unstage: (cwd: string, path: string) => Promise<GitOperationResult>;
+    commit: (cwd: string, message: string) => Promise<GitOperationResult>;
   };
   knowledge: {
     get: (projectPath: string) => Promise<KnowledgeSnapshot | null>;

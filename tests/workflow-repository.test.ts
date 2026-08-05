@@ -10,8 +10,7 @@ function freshRepo(): WorkflowRepository {
 
 function freshRepoWithDb(): { repo: WorkflowRepository; db: DatabaseSync } {
   const db = new DatabaseSync(":memory:");
-  const repo = new WorkflowRepository(db as never);
-  repo.migrate();
+  const repo = WorkflowRepository.bootstrap(db as never);
   return { repo, db };
 }
 
@@ -92,24 +91,21 @@ test("seeds include investigate (dieu tra) steps and match the reference diagram
 
 test("migrate is idempotent and does not duplicate seeds", () => {
   const db = new DatabaseSync(":memory:");
-  const repo = new WorkflowRepository(db as never);
-  repo.migrate();
-  repo.migrate();
+  WorkflowRepository.bootstrap(db as never);
+  const repo = WorkflowRepository.bootstrap(db as never);
   assert.equal(repo.list().length, 5);
 });
 
 test("deleted seed workflows stay deleted after a restart", () => {
   const db = new DatabaseSync(":memory:");
-  const repo = new WorkflowRepository(db as never);
-  repo.migrate();
+  const repo = WorkflowRepository.bootstrap(db as never);
 
   for (const workflow of repo.list()) {
     repo.remove(workflow.id);
   }
   assert.equal(repo.list().length, 0);
 
-  const reopened = new WorkflowRepository(db as never);
-  reopened.migrate();
+  const reopened = WorkflowRepository.bootstrap(db as never);
   assert.equal(reopened.list().length, 0);
 });
 

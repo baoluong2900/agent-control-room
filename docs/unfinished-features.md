@@ -4,17 +4,23 @@ Tài liệu này ghi lại các khoảng trống chức năng đã được xác
 
 Ngày ghi nhận: 2026-08-04.
 
+Cập nhật 2026-08-05: xem `docs/audit-2026-08-05.md` cho bản rà soát mới nhất. Bản đó
+ghi lại một bug thật đã tìm ra và sửa (run bị "vô hình" trong lúc spawn, khiến
+`stop()` không có tác dụng và concurrency limit bị vượt), cùng phần verify lại từng
+gap dưới đây bằng grep source ngày 2026-08-05.
+
+Cập nhật bổ sung cùng ngày: các kế hoạch triển khai chi tiết đã được tách thành từng file trong `docs/feature/`, bắt đầu từ `docs/feature/README.md`. Một số gap trong bản ghi ban đầu đã được thu hẹp sau commit `0a434f1` (`feat: add schema migrations, provider verification, and step chaining`): app database đã có `schema_migrations`, provider verification backend đã có, và workflow step chaining / profile binding backend đã có. Các mục dưới đây giữ vai trò báo cáo gap; kế hoạch code cụ thể nằm trong `docs/feature/*.md`.
+
 ## Tóm tắt ưu tiên
 
 | Mức | Khu vực | Vấn đề chính | Hướng xử lý ngắn |
 | --- | --- | --- | --- |
-| P0 | Workflows | Contract/editor cho phép trigger `git-push`, `file-change`, `issue-created`, `webhook`, nhưng scheduler chỉ chạy `schedule`. | Hoặc ẩn/disable các trigger chưa chạy được, hoặc thêm watcher/webhook runners thật. |
-| P0 | Provider connections | OAuth/device link hiện chỉ mở trang ngoài; app không có callback/device-code flow để tự lưu token. | Đổi copy thành “manual/local link”, hoặc implement OAuth/device callback + token exchange. |
-| P1 | Knowledge | CodeGraph là full rescan + regex heuristic, có cap im lặng, chưa có AST/LSP/incremental index. | Ghi rõ giới hạn trong UI, rồi thêm incremental scanner/parser thật. |
-| P1 | Git | App chỉ đọc branch/status/diff stat; không có stage/commit/branch/push/pull/stash/log. | Mở rộng contract IPC và UI Git panel theo từng operation an toàn. |
-| P1 | Analytics/metrics | Một số delta metric đã có type/UI nhưng service không tính nên luôn vắng. | Implement historical windows hoặc bỏ delta khỏi UI. |
+| P0 residual | Workflows | Unsupported remote triggers are gated/warned; `file-change` has a local runner, but true remote `git-push`, `issue-created`, and `webhook` automation still need architecture. | Keep remote triggers disabled/warned until adding ref polling/API polling/local webhook service. |
+| P0 residual | Provider connections | Local verification is wired and Connect no longer self-claims `connected`; OAuth/device remains open-external/manual, not token exchange. | Keep copy honest or implement callback/device-code auth as a separate feature. |
+| P1 | Knowledge | CodeGraph is still full rescan + regex heuristic; truncation reporting now exists for caps/skips/drops. | Use current report to guide incremental scanner and parser work. |
+| P1 residual | Git | Patch viewer, log, stage/unstage, and commit now exist; branch/push/pull/stash/blame/conflict tooling remains future work. | Keep expanding operations by reversibility: stash/log details next, push only with explicit outbound confirmation. |
 | P2 | Tasks | “Plan” là heuristic trong code, không dùng AI/LLM dù UI mô tả khá thông minh. | Đổi copy thành heuristic scheduler hoặc thêm planner agent thật. |
-| P2 | Agents | Agent run không có pause/resume/restart/concurrency limit; chat resume chỉ hỗ trợ Claude/Agy JSON. | Thêm lifecycle actions và capability flags theo provider. |
+| P2 residual | Agents | Restart + concurrency queue landed; pause/resume and SIGTERM escalation/tree-kill remain hardening gaps. | Add kill escalation tests/implementation; keep pause only for CLIs with explicit support. |
 | P2 | AI gateway docs | `docs/aiagnet.md` mô tả 9Router/CLIProxyAPI sidecar, nhưng runtime/package hiện chưa có router process hoặc `/v1` endpoint. | Gắn nhãn tài liệu này là proposal, hoặc implement gateway sidecar thật. |
 
 ## Đã sửa (2026-08-04): workflow step ↔ agent connection
@@ -29,27 +35,28 @@ Lưu ý về mục R1 bên dưới: `baseUrl` cho phép **trỏ tới** một ro
 
 Test: `tests/workflow-agent-binding.test.ts`. Migration cho DB cũ: version 4 và 5 trong `src/main/database/migrations.ts`.
 
-## 1. Workflows: trigger được khai báo nhiều hơn scheduler thực sự hỗ trợ
+## 1. Workflows: unsupported remote triggers are gated; local triggers run
 
-### W1 — Các trigger ngoài `schedule` chưa tự chạy
+### W1 — Remote triggers still need runners, but UI no longer promises them silently
 
-Evidence:
+Status update 2026-08-04:
 
-- `WorkflowTriggerType` khai báo sáu loại trigger: `manual`, `schedule`, `git-push`, `file-change`, `issue-created`, `webhook` tại `src/contracts/workflow.ts:20`.
-- Editor cho user chọn tất cả các loại trigger thông qua `triggerTypes.map(...)` tại `src/renderer/workflows/WorkflowEditorDrawer.tsx:285` và lưu `trigger.type` tại `src/renderer/workflows/WorkflowEditorDrawer.tsx:185`.
-- Scheduler chỉ xét workflow khi `workflow.trigger.type === "schedule"` tại `src/main/workflows/workflow-scheduler.ts:76` đến `src/main/workflows/workflow-scheduler.ts:82`.
-- Không có service nào theo dõi git push, file change, issue-created, hoặc webhook trong IPC surface hiện tại; IPC chỉ có `workflow:run-due` cho schedule tại `src/main/ipc/register-ipc.ts:111`.
+- `manual` and `schedule` remain supported.
+- `file-change` now has a local runner with debounce/ignore/self-loop protection.
+- Unsupported remote triggers (`git-push`, `issue-created`, `webhook`) are gated/warned instead of appearing as fully working automation.
 
-Hệ quả: user có thể tạo workflow `git-push`, `file-change`, `issue-created`, hoặc `webhook`, workflow vẫn được lưu và hiển thị như một trigger hợp lệ, nhưng sẽ không bao giờ tự fire nếu user không bấm Run thủ công.
+Hệ quả còn lại: app vẫn chưa có service nhận sự kiện từ bên ngoài. `git-push` needs local ref polling or hook integration; `issue-created` needs provider polling/webhook + credentials; `webhook` needs an HTTP listener/tunnel/security model.
 
-Việc nên làm:
+Việc nên làm tiếp:
 
-1. Ngắn hạn: trong editor, chỉ cho chọn `manual` và `schedule`; các loại còn lại hiển thị “coming later” hoặc disabled.
-2. Trung hạn: thêm từng runner riêng:
-   - `file-change`: filesystem watcher theo `projectPath` + debounce.
-   - `git-push`: hook/polling git remote/ref hoặc user-configured post-push hook.
-   - `webhook`: local listener/tunnel hoặc app-level webhook inbox.
-   - `issue-created`: provider integration cụ thể, ví dụ GitHub/Jira polling/webhook.
+1. Keep remote triggers disabled/warned until a runner exists.
+2. Add `git-push`/ref-change via local polling if product wants a local-only path.
+3. Treat webhook/issue-created as architecture work, not small UI fixes.
+4. **Mới phát hiện 2026-08-05:** seed data vẫn quảng cáo trigger chưa chạy được —
+   `src/main/workflows/workflow-seeds.ts:108` seed `trigger: { type: "git-push" }` và
+   `:180` seed `type: "issue-created"`. UI đã gate/warn nhưng seed thì chưa, nên
+   workspace mới vẫn có workflow trông như automation thật. Đổi hai seed này sang
+   `manual`/`schedule`.
 
 ### W2 — Field `trigger.detail` được lưu nhưng chưa điều khiển runtime
 
@@ -64,17 +71,9 @@ Hệ quả: field Detail hiện chủ yếu là metadata hiển thị/lưu trữ
 
 Việc nên làm: định nghĩa schema riêng cho từng trigger thay vì một string tự do, ví dụ `{ branchPattern, pathGlobs }` cho file/git, `{ provider, projectKey }` cho issue, `{ secret, route }` cho webhook.
 
-### W3 — Workflow metrics có delta fields nhưng service chưa tính
+### W3 — Workflow metrics delta đã được implement
 
-Evidence:
-
-- `WorkflowMetrics` có `totalDeltaPercent`, `activeDeltaPercent`, `runsDeltaPercent`, `successDeltaPercent` tại `src/contracts/workflow.ts:143` đến `src/contracts/workflow.ts:146`.
-- UI render delta nếu field tồn tại tại `src/renderer/workflows/WorkflowsModule.tsx:517` đến `src/renderer/workflows/WorkflowsModule.tsx:560`.
-- `WorkflowService.metrics()` chỉ trả `totalWorkflows`, `activeWorkflows`, `automatedRuns`, `successRate` tại `src/main/workflows/workflow-service.ts:95` đến `src/main/workflows/workflow-service.ts:112`.
-
-Hệ quả: delta “from last month” đã có UI path nhưng backend không bao giờ gửi dữ liệu.
-
-Việc nên làm: tính delta theo run history trong repository, hoặc bỏ delta UI/type để tránh tạo kỳ vọng sai.
+Status update 2026-08-04: repository/service now computes metric deltas from historical windows when enough prior-period data exists, and the renderer shows signed up/down movement only when values are meaningful. This is no longer an unfinished feature; see `docs/feature/done/workflow-metrics-delta.md` for the completed plan.
 
 ## 2. Provider connections: “OAuth/device links” chưa có auth flow thật
 
@@ -94,17 +93,15 @@ Việc nên làm:
 1. Nếu muốn giữ scope nhỏ: đổi wording thành “Open provider login/docs” và chỉ coi connection là local metadata/manual secret.
 2. Nếu muốn đúng nghĩa OAuth/device: thêm callback URL/deep link hoặc device-code polling, token exchange, refresh/expiry handling, và trạng thái expired tự động.
 
-### S2 — Provider connections chưa kiểm tra quota/auth thật
+### S2 — Provider verification local đã có và Connect không còn tự nhận connected
 
-Evidence:
+Status update 2026-08-04:
 
-- `ProviderConnection` có `status`, `quotaLabel`, `lastConnectedAt` tại `src/contracts/settings.ts:35` đến `src/contracts/settings.ts:48`.
-- `saveProviderConnection()` mặc định status thành `connected` nếu input không truyền status tại `src/main/settings/settings-service.ts:58` đến `src/main/settings/settings-service.ts:63`.
-- Không có call kiểm tra provider API hoặc CLI auth trong `SettingsService`; service chỉ lưu DB và secret vault.
+- Provider verification backend remains local-only by design: it checks vault credential presence and CLI availability; it does not call provider APIs for quota/auth-live checks.
+- New/saved connections default to `unverified` unless verification succeeds.
+- Renderer Connect/Reconnect no longer hardcodes `status: "connected"`; UI can show `unverified`, `connected`, or `disconnected` with verification detail.
 
-Hệ quả: connection có thể hiện “connected” dù key/token chưa được validate.
-
-Việc nên làm: thêm “Verify connection” theo provider, hoặc đổi status mặc định thành `disconnected`/`unverified` cho đến khi check thành công.
+Residual: OAuth/device remains an open-external/manual credential flow. If product wants real OAuth/device auth, add callback/deep-link or device-code exchange as a separate feature.
 
 ### S3 — Secrets đã encrypted, nhưng vẫn là local file vault
 
@@ -144,44 +141,35 @@ Hệ quả: CodeGraph hữu ích để overview, nhưng chưa đủ tin cậy ch
 
 Việc nên làm: thêm parser theo language ưu tiên: TypeScript compiler API cho TS/TSX/JS/JSX, Python `ast`, Go parser/LSP, sau đó fallback regex.
 
-### K3 — Scanner có cap và truncation nhưng UI/docs chưa nhấn mạnh đủ
+### K3 — Truncation report đã có; cap không còn im lặng
 
-Evidence:
+Status update 2026-08-04:
 
-- Default scan giới hạn `defaultMaxFiles = 800` và `defaultMaxFileBytes = 180_000` tại `src/main/knowledge/knowledge-service.ts:29` đến `src/main/knowledge/knowledge-service.ts:30`.
-- Input bị clamp tối đa `maxFiles` 5,000 và `maxFileBytes` 1,000,000 tại `src/main/knowledge/knowledge-service.ts:110` đến `src/main/knowledge/knowledge-service.ts:111`.
-- Graph node/edge bị cap `1_200` nodes và `2_400` edges tại `src/main/knowledge/knowledge-service.ts:347` đến `src/main/knowledge/knowledge-service.ts:351`.
+- `KnowledgeSnapshot.truncation` stores `hitFileLimit`, `filesSeen`, `filesIndexed`, skip counts by reason, graph node/edge drops, and largest skipped files.
+- `truncation_json` is persisted and old NULL snapshots read safely.
+- Knowledge UI surfaces the report and offers an increase-caps rescan action when the file limit is hit.
+- Markdown/XML exports include truncation details.
 
-Hệ quả: với repo lớn, “indexed files” và graph chỉ là slice, không phải toàn bộ repo.
+Hệ quả còn lại: với repo lớn, CodeGraph vẫn là bounded slice by design, but the user can now see exactly what was excluded. The remaining Knowledge work is K1/K2: incremental indexing and AST/LSP-grade parsing/resolution.
 
-Việc nên làm: hiển thị cap/skipped rõ trong UI, cho cấu hình scan sâu, và lưu report “excluded by size/count/ignored dir”.
+## 4. Git: Git workspace MVP đã có, còn thiếu thao tác nâng cao
 
-## 4. Git: panel mới là diff/status viewer, chưa phải Git workspace đầy đủ
+### G1 — Patch/log/stage/commit đã có
 
-### G1 — Contract chỉ có `git.diff(cwd)`
+Status update 2026-08-04:
 
-Evidence:
+- `AgenticDesktopApi.git` now includes `diff`, `fileDiff`, `log`, `stage`, `unstage`, and `commit`.
+- Preload and IPC expose the same operations.
+- Main service returns refreshed `GitDiffSummary` after write operations so UI refreshes from Git state.
+- Stage/unstage/commit are intentionally scoped to local repository state; no outbound `push` was added.
 
-- `AgenticDesktopApi.git` chỉ định nghĩa `diff(cwd)` tại `src/contracts/ipc.ts:106` đến `src/contracts/ipc.ts:108`.
-- Preload chỉ expose `git.diff` tại `src/preload/preload.ts:84` đến `src/preload/preload.ts:86`.
-- IPC handler chỉ có `git:diff` tại `src/main/ipc/register-ipc.ts:120`.
-- `readGitDiff()` chạy `rev-parse`, `branch --show-current`, `status --porcelain`, `diff --stat`, `diff --cached --stat` tại `src/main/git/git-service.ts:9` đến `src/main/git/git-service.ts:48`.
+Residual: branch checkout/create, push/pull/fetch, stash, blame, conflict resolution, structured binary/truncated diff metadata, and better missing-git error classification remain future Git workspace work.
 
-Hệ quả: app chưa có stage/unstage, commit, branch checkout/create, push/pull/fetch, stash, log, blame, conflict resolution, hoặc full patch viewer.
+Việc nên làm tiếp: add reversible/local operations before outbound ones; treat `push` as a separate plan with explicit confirmation and protected-branch/credential handling.
 
-Việc nên làm: mở rộng Git API theo hướng read-only trước (`log`, `show`, full `diff`), sau đó mới thêm action có confirm rõ (`stage`, `commit`, `stash`, `push`).
+### G2 — Git panel đã xem được patch từng file
 
-### G2 — Git Diff Viewer không hiển thị patch từng file
-
-Evidence:
-
-- UI chỉ có hai tab `Files` và `Stat` tại `src/renderer/components/GitDiffPanel.tsx:38` đến `src/renderer/components/GitDiffPanel.tsx:57`.
-- File list chỉ render path/status code tại `src/renderer/components/GitDiffPanel.tsx:95` đến `src/renderer/components/GitDiffPanel.tsx:114`.
-- `diffStat` là text stat, không phải patch content tại `src/main/git/git-service.ts:25` đến `src/main/git/git-service.ts:30`.
-
-Hệ quả: tên “Git Diff Viewer” đúng ở mức summary, nhưng chưa xem được diff hunk thật trong app.
-
-Việc nên làm: thêm endpoint `git:fileDiff(cwd, path, staged?)` và panel hunk viewer có syntax highlight tối thiểu.
+Status update 2026-08-04: `GitDiffPanel` now has Files/Patch/Stat/Log views. File rows are clickable and load `git:fileDiff(cwd, path, staged?)`; the panel also supports staging/unstaging a selected row and committing staged changes. Current patch view renders raw patch text rather than parsed hunk rows with colored gutters, so syntax-highlighted/structured diff rendering remains a UX enhancement rather than a missing runtime capability.
 
 ## 5. Tasks: planner/scheduler có thật nhưng còn heuristic và tuyến tính
 
@@ -224,17 +212,35 @@ Việc nên làm: giữ preset nhưng label rõ “Templates”, hoặc tạo on
 
 ## 6. Agents: runtime chạy thật, nhưng lifecycle/capability chưa đầy đủ
 
-### A1 — Chưa có pause/resume/restart/concurrency limit
+### A1 — Restart/concurrency queue đã có; kill escalation và pause capability còn lại
 
-Evidence:
+Status update 2026-08-04:
 
-- Agent IPC chỉ có `start`, `stop`, `send`, `sessions`, `history`, `logs`, profile CRUD tại `src/contracts/ipc.ts:63` đến `src/contracts/ipc.ts:77`.
-- `AgentProcessManager` có `start()`, `send()`, `stop()`, `stopAll()`, `sessions()` tại `src/main/processes/agent-process-manager.ts:57`, `src/main/processes/agent-process-manager.ts:247`, `src/main/processes/agent-process-manager.ts:257`, `src/main/processes/agent-process-manager.ts:286`, `src/main/processes/agent-process-manager.ts:293`.
-- Không có pause/resume/restart API hoặc max concurrent runs trong manager.
+- Restart is now available through the agent lifecycle path and creates a new run from saved input while preserving the previous run/logs.
+- Concurrency limit + queue are real runtime behavior; `queued` no longer means “about to spawn immediately”.
+- `stopAll`/shutdown path handles queued work without spawning more processes.
 
-Hệ quả: start/stop/stdin/logs đều thật, nhưng process lifecycle vẫn là MVP.
+Status update 2026-08-05 — spawn-window bug fixed:
 
-Việc nên làm: thêm `restart(runId/profileId)`, `pause` chỉ khi CLI/process hỗ trợ, queue/concurrency limit theo CLI, và UI trạng thái “queued because limit”.
+`drainQueue()` shifted a run off `queued` and then awaited `spawnQueued()`, which
+awaits `buildInvocation()` before registering the child in `running`. During that
+window the run was in neither collection, so it counted against neither the
+concurrency limit (a fourth child could spawn past `MAX_CONCURRENT_RUNS = 3`) nor
+`sessions()` (the UI dropped the row), and `stop()` found it nowhere and silently
+did nothing — leaving an orphaned child once the spawn completed.
+
+Fix: a `spawning` map holds in-flight spawns, `activeCount()` = `running.size +
+spawning.size` gates concurrency, `sessions()` reports them as `planning` /
+`(starting)`, and `stop()` records the cancellation in `cancelledSpawns` so
+`spawnQueued()` SIGTERMs the fresh child instead of publishing it as live.
+Verified: `tests/agent-process-lifecycle.test.ts` went from 6 pass / 1 fail to 7
+pass / 0 fail across three consecutive runs; full `npm test` is 175/175.
+
+Residual: `stop()` still needs hardening for stubborn child processes — SIGKILL /
+tree-kill escalation after a SIGTERM timeout is still absent (grep for `SIGKILL`
+and `tree-kill` in `src/main/processes/agent-process-manager.ts` returns nothing).
+Pause/resume should stay out of scope unless a CLI exposes an application-level
+checkpoint/resume capability.
 
 ### A2 — Structured chat resume chỉ áp dụng Claude/Agy
 
@@ -248,18 +254,9 @@ Hệ quả: Chat UI có thể dùng chung nhiều agent profile, nhưng resume c
 
 Việc nên làm: thêm capability flags trong catalog: `supportsStructuredChat`, `resumeArgs`, `conversationIdExtractor`, hoặc ẩn resume/chat-specific affordances cho provider chưa hỗ trợ.
 
-### A3 — Terminal output được lưu nhưng chưa có retention/size policy
+### A3 — Terminal log retention đã có
 
-Evidence:
-
-- Mọi stdout/stderr được append vào `terminal_logs` qua `handleOutput()` tại `src/main/processes/agent-process-manager.ts:324` đến `src/main/processes/agent-process-manager.ts:358`.
-- Lifecycle messages cũng append vào terminal log tại `src/main/processes/agent-process-manager.ts:360` đến `src/main/processes/agent-process-manager.ts:371`.
-- Contract `logs(runId)` trả toàn bộ log array tại `src/contracts/ipc.ts:76`.
-- Không thấy retention/max bytes/truncate policy ở `AgentProcessManager`; workflow step output có slice `output.slice(-4000)` tại `src/main/workflows/workflow-service.ts:528`, nhưng terminal logs không có cap tương tự ở manager.
-
-Hệ quả: long-running noisy agents có thể làm SQLite phình lớn.
-
-Việc nên làm: thêm retention policy: max logs per run, max bytes per message/run, cleanup old logs, và UI warning khi truncation xảy ra.
+Status update 2026-08-04: terminal log storage now has per-message truncation with a visible marker, per-run row pruning, and startup cleanup for old finished-run logs. Long-running noisy agents no longer grow SQLite without bound. Remaining nice-to-have: expose database/log size and manual cleanup controls in Settings/Diagnostics.
 
 ## 7. AI gateway / router: tài liệu kiến trúc đã mô tả nhiều hơn runtime hiện tại
 
@@ -317,19 +314,19 @@ Hệ quả: placeholder “Search workspace” có thể bị hiểu là search 
 
 Việc nên làm: đổi placeholder thành “Open workspace area”, hoặc tích hợp project/task/knowledge search.
 
-## 9. Database/migration: có ensureColumns, nhưng chưa có versioned migrations đầy đủ
+## 9. Database/migration: app DB đã có `schema_migrations`, workflow repository còn legacy `ensureColumns`
 
-### DB1 — Schema nâng cấp là additive columns, chưa có migration version theo release
+### DB1 — Versioned migrations đã có cho app DB, nhưng workflow schema chưa được gom hết vào đó
 
 Evidence:
 
-- `DesktopDatabase.open()` gọi `database.migrate()` khi mở DB tại `src/main/database/desktop-database.ts:177` đến `src/main/database/desktop-database.ts:186`.
-- Workflow repository tạo bảng nếu chưa có và thêm cột bằng `ensureColumns()` tại `src/main/database/workflow-repository.ts:86` đến `src/main/database/workflow-repository.ts:171`.
-- Desktop database cũng import `ensureColumns` tại `src/main/database/desktop-database.ts:28` và dùng mô hình tương tự cho schema chính.
+- `migrations.ts` đã tạo bảng `schema_migrations`, có `appMigrations`, và `runMigrations()` chạy transaction từng version.
+- `DesktopDatabase.migrate()` đã gọi `runMigrations(this.db, appMigrations)` sau baseline schema.
+- Workflow repository vẫn tự tạo bảng và thêm nhiều cột bằng `ensureColumns()` tại `src/main/database/workflow-repository.ts:86` đến `src/main/database/workflow-repository.ts:171`.
 
-Hệ quả: app xử lý tốt việc thêm cột, nhưng chưa có migration version table cho thay đổi phá vỡ như rename column, split table, backfill dữ liệu phức tạp, hoặc rollback.
+Hệ quả: gap “chưa có migration version table” đã được sửa cho app DB chính, nhưng source of truth cho workflow schema vẫn bị chia đôi giữa `workflow-repository.ts` và `migrations.ts`. Các thay đổi workflow phức tạp như rename/split/backfill vẫn cần gom về migration version.
 
-Việc nên làm: thêm `schema_migrations` version table, migration functions idempotent, backup DB trước destructive migration, và test mở DB từ các snapshot cũ.
+Việc nên làm: gom các `ensureColumns` còn lại của workflow vào `appMigrations`, giữ migration idempotent, backup DB trước destructive migration, và test mở DB từ các snapshot cũ.
 
 ## Những phần đã kiểm tra và không nên gọi là “chưa làm”
 
@@ -342,11 +339,10 @@ Việc nên làm: thêm `schema_migrations` version table, migration functions i
 
 ## Đề xuất thứ tự làm tiếp
 
-1. **Chốt scope hiển thị**: disable/label rõ các trigger workflow chưa chạy được và đổi copy OAuth/device nếu chưa implement callback.
-2. **Nâng Git panel lên useful daily tool**: thêm full patch viewer trước, sau đó stage/commit.
-3. **Làm Knowledge index đáng tin hơn**: hiển thị cap/skipped, thêm incremental scan, rồi TypeScript parser cho repo TS/TSX.
-4. **Thêm verification cho provider connections**: validate API key/CLI auth, tự set expired/disconnected.
-5. **Nâng task planner**: thêm option “AI plan from project context” dùng knowledge snapshot + agent CLI.
-6. **Thêm lifecycle/retention cho agents**: restart, concurrency limit, terminal log retention.
-7. **Làm rõ AI gateway/9Router**: gắn nhãn `docs/aiagnet.md` là proposal nếu chưa build sidecar, hoặc bắt đầu bằng sidecar health check + spawn lifecycle.
-8. **Versioned DB migrations**: chuẩn bị trước khi schema bắt đầu thay đổi nhiều hơn additive columns.
+1. **Làm Knowledge index đáng tin hơn**: dùng truncation report hiện có để ưu tiên incremental scan, rồi thêm TypeScript parser cho repo TS/TSX.
+2. **Hoàn thiện Git workspace beyond MVP**: thêm stash/branch/log details/conflict UX; chỉ thêm push sau khi có confirm rõ cho hành động outbound.
+3. **Hoàn thiện trigger remote**: giữ `git-push`/`issue-created`/`webhook` gated cho tới khi có ref polling/API polling/local listener thật.
+4. **Nâng task planner**: thêm option “AI plan from project context” dùng knowledge snapshot + agent CLI.
+5. **Agent lifecycle hardening**: thêm SIGTERM→SIGKILL/tree-kill escalation; pause/resume chỉ làm khi CLI có capability rõ.
+6. **Làm rõ AI gateway/9Router**: gắn nhãn `docs/aiagnet.md` là proposal nếu chưa build sidecar, hoặc bắt đầu bằng sidecar health check + spawn lifecycle.
+7. **Versioned DB migrations**: gom dần workflow repository legacy `ensureColumns` vào `appMigrations` trước khi schema bắt đầu thay đổi phức tạp hơn additive columns.

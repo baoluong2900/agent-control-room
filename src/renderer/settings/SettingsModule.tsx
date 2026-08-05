@@ -26,7 +26,13 @@ import type {
   ProviderConnectionStatus,
 } from "@contracts";
 import { useEffect, useMemo, useState } from "react";
-import { getProviderCatalogEntry, providerCatalog, supportsBaseUrl } from "./provider-catalog";
+import {
+  getProviderCatalogEntry,
+  providerCatalog,
+  requiresApiKey,
+  supportsBaseUrl,
+  type ProviderCatalogEntry,
+} from "./provider-catalog";
 import "./settings.css";
 
 type BannerTone = "success" | "error" | "idle";
@@ -36,6 +42,14 @@ type LoginMethodOption = {
   label: string;
   icon: LucideIcon;
   detail: string;
+};
+
+/** Editable form state for one provider card. Kept per provider so typing a key
+ *  into one card cannot leak into another's save. */
+type ProviderDraft = {
+  accountLabel: string;
+  apiKey: string;
+  baseUrl: string;
 };
 
 type SettingsModuleProps = {
@@ -49,6 +63,13 @@ const loginMethods: LoginMethodOption[] = [
   { value: "email", label: "Email", icon: UserRound, detail: "Local email profile" },
 ];
 
+const statusCopy: Record<ProviderConnectionStatus, string> = {
+  connected: "Connected",
+  unverified: "Not checked",
+  expired: "Expired",
+  disconnected: "Disconnected",
+};
+
 const emptyIdentity: AppIdentity = {
   id: "",
   email: "owner@agentic.local",
@@ -59,18 +80,19 @@ const emptyIdentity: AppIdentity = {
   updatedAt: "",
 };
 
+function emptyDrafts(): Record<ProviderConnectionProvider, ProviderDraft> {
+  return Object.fromEntries(
+    providerCatalog.map((entry) => [
+      entry.provider,
+      { accountLabel: entry.defaultAccountLabel, apiKey: "", baseUrl: "" },
+    ]),
+  ) as Record<ProviderConnectionProvider, ProviderDraft>;
+}
+
 export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsModuleProps) {
   const [identity, setIdentity] = useState<AppIdentity>(emptyIdentity);
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
-  const [drafts, setDrafts] = useState<Record<ProviderConnectionProvider, string>>({
-    "openai-codex": "OpenAI account",
-    "claude-code": "Claude account",
-    "github-copilot": "GitHub account",
-    kiro: "Kiro account",
-    "custom-api": "Custom API key",
-  });
-  const [apiKeyDraft, setApiKeyDraft] = useState("");
-  const [baseUrlDrafts, setBaseUrlDrafts] = useState<Partial<Record<ProviderConnectionProvider, string>>>({});
+  const [drafts, setDrafts] = useState<Record<ProviderConnectionProvider, ProviderDraft>>(emptyDrafts);
   const [loading, setLoading] = useState(true);
   const [savingIdentity, setSavingIdentity] = useState(false);
   const [busyProvider, setBusyProvider] = useState<ProviderConnectionProvider | null>(null);
@@ -106,6 +128,10 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
     };
   }, [connections, identity.status]);
 
+  function updateDraft(provider: ProviderConnectionProvider, patch: Partial<ProviderDraft>) {
+    setDrafts((current) => ({ ...current, [provider]: { ...current[provider], ...patch } }));
+  }
+
   async function refresh() {
     setLoading(true);
     setError(null);
@@ -121,7 +147,12 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
         const next = { ...current };
         for (const entry of providerCatalog) {
           const existing = nextConnections.find((connection) => connection.provider === entry.provider);
-          next[entry.provider] = existing?.accountLabel ?? current[entry.provider] ?? entry.defaultAccountLabel;
+          next[entry.provider] = {
+            ...current[entry.provider],
+            accountLabel:
+              existing?.accountLabel ?? current[entry.provider]?.accountLabel ?? entry.defaultAccountLabel,
+            baseUrl: existing?.baseUrl ?? current[entry.provider]?.baseUrl ?? "",
+          };
         }
         return next;
       });
@@ -159,11 +190,14 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
 
   async function connectProvider(provider: ProviderConnectionProvider) {
     const entry = getProviderCatalogEntry(provider);
-    const accountLabel = drafts[provider].trim() || entry.defaultAccountLabel;
+    const draft = drafts[provider];
+    const accountLabel = draft.accountLabel.trim() || entry.defaultAccountLabel;
     setBusyProvider(provider);
     setError(null);
     try {
-      if (entry.authMode !== "api-key") {
+      // A gateway provider is a local process the user already runs, so opening
+      // a browser page for it would be noise rather than part of the flow.
+      if (entry.authMode !== "api-key" && provider !== "hermes-agent") {
         const result = await window.agentic.settings.openProviderAuth({ provider });
         if (!result.opened) {
           throw new Error(`Could not open ${entry.label}.`);
@@ -174,21 +208,22 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
         provider,
         authMode: entry.authMode,
         accountLabel,
-        status: "connected",
-        tokenSecret: provider === "custom-api" ? apiKeyDraft.trim() : undefined,
-        baseUrl: supportsBaseUrl(provider) ? baseUrlDrafts[provider]?.trim() ?? "" : undefined,
-        quotaLabel: provider === "custom-api" ? "API key" : undefined,
+        // A gateway is only usable once its endpoint answers, so it starts
+        // unchecked and the Verify button is what promotes it.
+        status: provider === "hermes-agent" ? "unverified" : "connected",
+        tokenSecret: draft.apiKey.trim() || undefined,
+        baseUrl: supportsBaseUrl(provider) ? draft.baseUrl.trim() : undefined,
+        quotaLabel: requiresApiKey(provider) ? "API key" : undefined,
       });
 
-      setConnections((current) => {
-        const next = current.filter((connection) => connection.id !== saved.id);
-        return [saved, ...next];
-      });
-      setDrafts((current) => ({ ...current, [provider]: accountLabel }));
-      if (provider === "custom-api") {
-        setApiKeyDraft("");
-      }
-      showBanner(`${entry.label} connected locally.`, "success");
+      setConnections((current) => [saved, ...current.filter((connection) => connection.id !== saved.id)]);
+      updateDraft(provider, { accountLabel, apiKey: "" });
+      showBanner(
+        provider === "hermes-agent"
+          ? `${entry.label} saved. Click Verify to check the proxy is answering.`
+          : `${entry.label} connected locally.`,
+        "success",
+      );
     } catch (nextError) {
       setError(formatError(nextError));
     } finally {
@@ -201,7 +236,7 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
     setError(null);
     try {
       const entry = getProviderCatalogEntry(connection.provider);
-      if (entry.authMode !== "api-key") {
+      if (entry.authMode !== "api-key" && connection.provider !== "hermes-agent") {
         const result = await window.agentic.settings.openProviderAuth({ provider: connection.provider });
         if (!result.opened) {
           throw new Error(`Could not open ${entry.label}.`);
@@ -316,7 +351,7 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
         <section className="settings-stats" aria-label="Identity summary">
           <StatPill label="Local sign-in" value={summary.signedIn ? "Signed in" : "Signed out"} tone="cyan" />
           <StatPill label="Connected" value={summary.connected} tone="green" />
-          <StatPill label="Unverified" value={summary.unverified} tone="cyan" />
+          <StatPill label="Not checked" value={summary.unverified} tone="cyan" />
           <StatPill label="Expired" value={summary.expired} tone="amber" />
           <StatPill label="API keys" value={summary.apiKeys} tone="purple" />
         </section>
@@ -439,9 +474,7 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
                         {entry.harness} · {entry.runtimeHint}
                       </small>
                     </div>
-                    <em>
-                      {active ? active.accountLabel ?? "Connected" : `${connectionsForProvider.length} saved`}
-                    </em>
+                    <em>{active ? active.accountLabel ?? "Connected" : `${connectionsForProvider.length} saved`}</em>
                   </div>
                 );
               })}
@@ -455,139 +488,30 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
           <header className="settings-section-head">
             <div>
               <h2>AI providers</h2>
-              <p>Open the official provider page, then save the local connection record on this machine.</p>
+              <p>
+                Connect a vendor account, point a CLI at your own endpoint, or route everything through the local
+                Hermes Agent proxy. Credentials never leave this machine.
+              </p>
             </div>
           </header>
 
           <div className="settings-provider-grid">
-            {providerGroups.map(({ entry, items }) => {
-              const Icon = entry.icon;
-              return (
-                <article key={entry.provider} className="provider-card">
-                  <header className="provider-head">
-                    <span className="provider-icon" style={{ ["--provider-accent" as string]: entry.accent }}>
-                      <Icon size={16} />
-                    </span>
-                    <div className="provider-head-copy">
-                      <strong>{entry.label}</strong>
-                      <small>
-                        {entry.description}
-                      </small>
-                    </div>
-                    <span className="provider-meta">{items.length} saved</span>
-                  </header>
-
-                  <div className="provider-create">
-                    <label className="settings-field compact">
-                      Account label
-                      <input
-                        value={drafts[entry.provider]}
-                        onChange={(event) =>
-                          setDrafts((current) => ({ ...current, [entry.provider]: event.target.value }))
-                        }
-                        placeholder={entry.defaultAccountLabel}
-                      />
-                    </label>
-                    {entry.provider === "custom-api" && (
-                      <label className="settings-field compact">
-                        API key
-                        <input
-                          value={apiKeyDraft}
-                          onChange={(event) => setApiKeyDraft(event.target.value)}
-                          placeholder="sk-..."
-                          type="password"
-                        />
-                      </label>
-                    )}
-                    {supportsBaseUrl(entry.provider) && (
-                      <label className="settings-field compact">
-                        Base URL <span className="settings-field-hint">optional proxy / router</span>
-                        <input
-                          value={baseUrlDrafts[entry.provider] ?? ""}
-                          onChange={(event) =>
-                            setBaseUrlDrafts((current) => ({ ...current, [entry.provider]: event.target.value }))
-                          }
-                          placeholder="http://127.0.0.1:20128/v1"
-                        />
-                      </label>
-                    )}
-                    <button
-                      className="settings-action settings-action-primary"
-                      onClick={() => void connectProvider(entry.provider)}
-                      disabled={busyProvider === entry.provider || (entry.provider === "custom-api" && !apiKeyDraft.trim())}
-                      type="button"
-                    >
-                      {busyProvider === entry.provider ? <Loader2 size={14} className="spin" /> : <Link2Icon provider={entry.provider} />}
-                      {entry.provider === "custom-api" ? "Store key" : "Connect"}
-                    </button>
-                  </div>
-
-                  <div className="provider-connection-list">
-                    {items.length > 0 ? (
-                      items.map((connection) => {
-                        const isBusy = busyConnectionId === connection.id;
-                        return (
-                          <div key={connection.id} className="provider-connection-row">
-                            <div className="provider-connection-copy">
-                              <strong>{connection.accountLabel ?? entry.defaultAccountLabel}</strong>
-                              <small>
-                                <StatusChip status={connection.status} />
-                                <span>{connection.authMode.replace("-", " ")}</span>
-                                {connection.quotaLabel && <span>{connection.quotaLabel}</span>}
-                              </small>
-                              {connection.verificationDetail && (
-                                <small className="provider-connection-detail" title={connection.verificationDetail}>
-                                  {connection.verificationDetail}
-                                </small>
-                              )}
-                            </div>
-                            <div className="provider-connection-actions">
-                              <button
-                                className="settings-mini-button"
-                                onClick={() => void verifyConnection(connection)}
-                                disabled={isBusy}
-                              >
-                                {isBusy ? <Loader2 size={13} className="spin" /> : <ShieldCheck size={13} />}
-                                Verify
-                              </button>
-                              <button
-                                className="settings-mini-button"
-                                onClick={() => void reconnectProvider(connection)}
-                                disabled={isBusy}
-                              >
-                                {isBusy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
-                                Reconnect
-                              </button>
-                              <button
-                                className="settings-mini-button"
-                                onClick={() => void disconnectProvider(connection)}
-                                disabled={isBusy || connection.status === "disconnected"}
-                              >
-                                <Unlink size={13} />
-                                Disconnect
-                              </button>
-                              <button
-                                className="settings-mini-button danger"
-                                onClick={() => void removeConnection(connection)}
-                                disabled={isBusy}
-                              >
-                                <Trash2 size={13} />
-                                Remove
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <p className="provider-empty">
-                        <Clock3 size={14} />
-                        Not connected yet.
-                      </p>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
+            {providerGroups.map(({ entry, items }) => (
+              <ProviderCard
+                key={entry.provider}
+                busyConnectionId={busyConnectionId}
+                connections={items}
+                draft={drafts[entry.provider]}
+                entry={entry}
+                saving={busyProvider === entry.provider}
+                onChangeDraft={(patch) => updateDraft(entry.provider, patch)}
+                onConnect={() => void connectProvider(entry.provider)}
+                onDisconnect={(connection) => void disconnectProvider(connection)}
+                onReconnect={(connection) => void reconnectProvider(connection)}
+                onRemove={(connection) => void removeConnection(connection)}
+                onVerify={(connection) => void verifyConnection(connection)}
+              />
+            ))}
           </div>
         </section>
       )}
@@ -595,8 +519,168 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
   );
 }
 
-function Link2Icon({ provider }: { provider: ProviderConnectionProvider }) {
-  return provider === "custom-api" ? <KeyRound size={14} /> : <ExternalLink size={14} />;
+function ProviderCard({
+  busyConnectionId,
+  connections,
+  draft,
+  entry,
+  saving,
+  onChangeDraft,
+  onConnect,
+  onDisconnect,
+  onReconnect,
+  onRemove,
+  onVerify,
+}: {
+  busyConnectionId: string | null;
+  connections: ProviderConnection[];
+  draft: ProviderDraft;
+  entry: ProviderCatalogEntry;
+  saving: boolean;
+  onChangeDraft: (patch: Partial<ProviderDraft>) => void;
+  onConnect: () => void;
+  onDisconnect: (connection: ProviderConnection) => void;
+  onReconnect: (connection: ProviderConnection) => void;
+  onRemove: (connection: ProviderConnection) => void;
+  onVerify: (connection: ProviderConnection) => void;
+}) {
+  const Icon = entry.icon;
+  const needsKey = requiresApiKey(entry.provider);
+  const live = connections.find(
+    (connection) => connection.status === "connected" || connection.status === "unverified",
+  );
+
+  return (
+    <article className={`provider-card ${live ? "is-live" : ""}`} style={{ ["--provider-accent" as string]: entry.accent }}>
+      <header className="provider-head">
+        <span className="provider-icon">
+          <Icon size={16} />
+        </span>
+        <div className="provider-head-copy">
+          <strong>{entry.label}</strong>
+          <small>{entry.description}</small>
+        </div>
+        <span className="provider-head-status">
+          {live ? <StatusChip status={live.status} /> : <span className="provider-meta">Not set up</span>}
+        </span>
+      </header>
+
+      <div className="provider-tags">
+        <span className="provider-tag">{entry.harness}</span>
+        <span className="provider-tag mono">{entry.runtimeHint}</span>
+        <span className="provider-tag">{entry.authMode.replace("-", " ")}</span>
+        {connections.length > 0 && <span className="provider-tag">{connections.length} saved</span>}
+      </div>
+
+      <div className="provider-create">
+        <label className="settings-field">
+          Account label
+          <input
+            value={draft.accountLabel}
+            onChange={(event) => onChangeDraft({ accountLabel: event.target.value })}
+            placeholder={entry.defaultAccountLabel}
+          />
+        </label>
+
+        {needsKey && (
+          <label className="settings-field">
+            API key
+            <input
+              value={draft.apiKey}
+              onChange={(event) => onChangeDraft({ apiKey: event.target.value })}
+              placeholder="sk-..."
+              type="password"
+              autoComplete="off"
+            />
+          </label>
+        )}
+
+        {supportsBaseUrl(entry.provider) && (
+          <label className="settings-field provider-field-wide">
+            Endpoint <span className="settings-field-hint">OpenAI-compatible base URL</span>
+            <input
+              value={draft.baseUrl}
+              onChange={(event) => onChangeDraft({ baseUrl: event.target.value })}
+              placeholder={entry.defaultBaseUrl ?? "http://127.0.0.1:20128/v1"}
+              spellCheck={false}
+            />
+          </label>
+        )}
+      </div>
+
+      <footer className="provider-create-foot">
+        <p className="provider-connect-hint">{entry.connectHint}</p>
+        <button
+          className="settings-action settings-action-primary"
+          onClick={onConnect}
+          disabled={saving || (needsKey && !draft.apiKey.trim())}
+          type="button"
+        >
+          {saving ? <Loader2 size={14} className="spin" /> : needsKey ? <KeyRound size={14} /> : <ExternalLink size={14} />}
+          {needsKey ? "Store key" : entry.provider === "hermes-agent" ? "Save endpoint" : "Connect"}
+        </button>
+      </footer>
+
+      <div className="provider-connection-list">
+        {connections.length > 0 ? (
+          connections.map((connection) => {
+            const isBusy = busyConnectionId === connection.id;
+            return (
+              <div key={connection.id} className="provider-connection-row">
+                <div className="provider-connection-copy">
+                  <strong>{connection.accountLabel ?? entry.defaultAccountLabel}</strong>
+                  <small>
+                    <StatusChip status={connection.status} />
+                    <span>{connection.authMode.replace("-", " ")}</span>
+                    {connection.quotaLabel && <span>{connection.quotaLabel}</span>}
+                    {(connection.baseUrl || entry.defaultBaseUrl) && (
+                      <span className="mono">{connection.baseUrl || entry.defaultBaseUrl}</span>
+                    )}
+                  </small>
+                  {connection.verificationDetail && (
+                    <small className="provider-connection-detail" title={connection.verificationDetail}>
+                      {connection.verificationDetail}
+                    </small>
+                  )}
+                </div>
+                <div className="provider-connection-actions">
+                  <button
+                    className="settings-mini-button primary"
+                    onClick={() => onVerify(connection)}
+                    disabled={isBusy}
+                  >
+                    {isBusy ? <Loader2 size={13} className="spin" /> : <ShieldCheck size={13} />}
+                    Verify
+                  </button>
+                  <button className="settings-mini-button" onClick={() => onReconnect(connection)} disabled={isBusy}>
+                    <RefreshCw size={13} />
+                    Reconnect
+                  </button>
+                  <button
+                    className="settings-mini-button"
+                    onClick={() => onDisconnect(connection)}
+                    disabled={isBusy || connection.status === "disconnected"}
+                  >
+                    <Unlink size={13} />
+                    Disconnect
+                  </button>
+                  <button className="settings-mini-button danger" onClick={() => onRemove(connection)} disabled={isBusy}>
+                    <Trash2 size={13} />
+                    Remove
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <p className="provider-empty">
+            <Clock3 size={14} />
+            No connection saved yet.
+          </p>
+        )}
+      </div>
+    </article>
+  );
 }
 
 function StatPill({
@@ -617,7 +701,7 @@ function StatPill({
 }
 
 function StatusChip({ status }: { status: ProviderConnectionStatus }) {
-  return <span className={`status-chip status-${status}`}>{status}</span>;
+  return <span className={`status-chip status-${status}`}>{statusCopy[status]}</span>;
 }
 
 function methodLabel(method: AppLoginMethod): string {

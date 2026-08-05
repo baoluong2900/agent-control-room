@@ -6,12 +6,16 @@ import {
   formatDate,
   formatDuration,
   formatRelative,
+  isLocallyRunnableTrigger,
+  locallyRunnableTriggerTypes,
   runStatusMeta,
   statusMeta,
   stepKindMeta,
   stepKinds,
   triggerMeta,
+  unsupportedTriggerCopy,
 } from "../src/renderer/workflows/workflow-ui.ts";
+import { workflowSeeds } from "../src/main/workflows/workflow-seeds.ts";
 
 test("formatDuration renders human-friendly durations", () => {
   assert.equal(formatDuration(undefined), "—");
@@ -59,4 +63,35 @@ test("cli, trigger, status and run-status metadata are complete", () => {
 
   assert.equal(runStatusMeta.success.label, "Success");
   assert.equal(runStatusMeta.failed.accent, "red");
+});
+
+test("every unsupported trigger has copy explaining why it cannot run", () => {
+  for (const type of Object.keys(triggerMeta) as Array<keyof typeof triggerMeta>) {
+    if (isLocallyRunnableTrigger(type)) {
+      assert.equal(unsupportedTriggerCopy[type], undefined, `${type} runs locally but carries unsupported copy`);
+      continue;
+    }
+    assert.ok(unsupportedTriggerCopy[type], `${type} has no runner and no explanation copy`);
+  }
+});
+
+test("seeded workflows only advertise triggers that actually run", () => {
+  // A freshly installed workspace must not look like it has automation it does
+  // not have. Two seeds used to ship `git-push` / `issue-created`, which the
+  // editor gates but the seeder did not, so the starter workflows read as live
+  // automation while nothing was ever going to fire them.
+  for (const seed of workflowSeeds) {
+    assert.ok(
+      isLocallyRunnableTrigger(seed.trigger.type),
+      `seed ${seed.id} uses trigger "${seed.trigger.type}", which has no local runner`,
+    );
+  }
+});
+
+test("scheduled seeds carry a schedule the parser can use", () => {
+  for (const seed of workflowSeeds) {
+    if (seed.trigger.type !== "schedule") continue;
+    assert.ok(seed.trigger.schedule?.trim(), `seed ${seed.id} is scheduled but has no schedule string`);
+  }
+  assert.deepEqual(locallyRunnableTriggerTypes, ["manual", "schedule", "file-change"]);
 });

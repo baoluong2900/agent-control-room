@@ -23,8 +23,17 @@ export type {
   AgentRunRecord,
   AgentSessionSummary,
   AgentStatus,
+  AgentStructuredChat,
 } from "./agent";
-export type { GitDiffSummary, GitFileChange, GitFileChangeKind, ProjectSummary } from "./project";
+export type {
+  GitCommitSummary,
+  GitDiffSummary,
+  GitFileChange,
+  GitFileChangeKind,
+  GitFileDiff,
+  GitOperationResult,
+  ProjectSummary,
+} from "./project";
 export type {
   KnowledgeCategoryStat,
   KnowledgeCodeGraph,
@@ -38,6 +47,7 @@ export type {
   KnowledgeLanguageStat,
   KnowledgeScanInput,
   KnowledgeSnapshot,
+  KnowledgeTruncationReport,
 } from "./knowledge";
 export type {
   AppIdentity,
@@ -55,7 +65,13 @@ export type {
   ProviderConnectionVerifyResult,
   ProviderVerificationOutcome,
 } from "./settings";
-export type { CliDiagnostic, SystemDiagnostics } from "./system";
+export type {
+  CliDiagnostic,
+  DiagnosticAction,
+  DiagnosticCheck,
+  DiagnosticStatus,
+  SystemDiagnostics,
+} from "./system";
 export type {
   TaskDifficulty,
   TaskEvent,

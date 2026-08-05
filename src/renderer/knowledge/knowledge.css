@@ -309,6 +309,103 @@
   width: 100%;
 }
 
+.knowledge-truncation-panel {
+  background: linear-gradient(145deg, rgba(43, 33, 111, .54), rgba(7, 8, 21, .74));
+  border: 1px solid rgba(251, 191, 36, .24);
+  border-radius: 8px;
+  box-shadow: inset 0 1px rgba(247, 243, 255, .04);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 13px;
+}
+
+.knowledge-truncation-panel header {
+  align-items: center;
+  color: #f9d978;
+  display: flex;
+  gap: 8px;
+}
+
+.knowledge-truncation-panel h2,
+.knowledge-truncation-panel h3 {
+  font-size: 13px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.knowledge-truncation-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.knowledge-truncation-grid div {
+  background: rgba(17, 22, 43, .72);
+  border: 1px solid rgba(147, 137, 170, .16);
+  border-radius: 7px;
+  padding: 8px;
+}
+
+.knowledge-truncation-grid dt {
+  color: #9e95b2;
+  font-size: 10px;
+}
+
+.knowledge-truncation-grid dd {
+  color: #f7f3ff;
+  font-family: var(--font-geist-mono);
+  font-size: 12px;
+  margin: 3px 0 0;
+}
+
+.knowledge-truncation-largest ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.knowledge-truncation-largest li,
+.knowledge-truncation-note {
+  background: rgba(17, 22, 43, .72);
+  border: 1px solid rgba(147, 137, 170, .15);
+  border-radius: 7px;
+  color: #d6cafc;
+  font-size: 11px;
+}
+
+.knowledge-truncation-largest li {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 7px 8px;
+}
+
+.knowledge-truncation-largest span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-truncation-largest em {
+  color: #f9d978;
+  flex: 0 0 auto;
+  font-family: var(--font-geist-mono);
+  font-style: normal;
+}
+
+.knowledge-truncation-note {
+  line-height: 1.45;
+  margin: 0;
+  padding: 8px;
+}
+
 .knowledge-main-panel {
   min-width: 0;
   overflow: hidden;

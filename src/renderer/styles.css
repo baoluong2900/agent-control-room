@@ -661,6 +661,55 @@ select {
   min-height: 210px;
 }
 
+.diagnostic-check-list {
+  display: grid;
+  gap: 8px;
+  padding: 14px 14px 0;
+}
+
+.diagnostic-check {
+  align-items: flex-start;
+  background: rgba(7, 8, 21, .8);
+  border: 1px solid rgba(148, 163, 184, .14);
+  border-radius: 9px;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 9px;
+}
+
+.diagnostic-check.status-ok { border-color: rgba(74, 223, 126, .24); }
+.diagnostic-check.status-warn { border-color: rgba(255, 212, 84, .24); }
+.diagnostic-check.status-fail { border-color: rgba(251, 113, 133, .28); }
+.diagnostic-check.status-unknown { border-color: rgba(148, 163, 184, .2); }
+
+.diagnostic-check.status-ok > svg { color: #4adf7e; }
+.diagnostic-check.status-warn > svg { color: #ffd454; }
+.diagnostic-check.status-fail > svg { color: #fb7185; }
+.diagnostic-check.status-unknown > svg { color: #94a3b8; }
+
+.diagnostic-check span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.diagnostic-check strong { color: #e1d7fd; font-size: 11px; }
+.diagnostic-check small { color: #897fa2; font-size: 9px; line-height: 1.45; }
+
+.diagnostic-check button {
+  align-items: center;
+  background: rgba(96, 165, 250, .1);
+  border: 1px solid rgba(96, 165, 250, .22);
+  border-radius: 6px;
+  color: #bfdbfe;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 9px;
+  gap: 4px;
+  padding: 5px 7px;
+}
+
 .desktop-diagnostics header svg,
 .agent-command-card header svg,
 .history-card header svg {
@@ -718,6 +767,14 @@ select {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.diagnostic-status {
+  font-size: 8px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.diagnostic-status.unknown { color: #94a3b8; }
 
 .agent-command-card {
   overflow: visible;
@@ -910,6 +967,11 @@ select {
   color: #67e8f9;
 }
 
+.git-view-toggle button:disabled {
+  color: rgba(143, 133, 166, .45);
+  cursor: not-allowed;
+}
+
 .git-counts {
   color: #8f85a6;
   font-size: 10px;
@@ -923,6 +985,22 @@ select {
   font-size: 11px;
   margin: 0;
   padding: 10px 2px;
+}
+
+.git-operation-message {
+  background: rgba(134, 239, 172, .1);
+  border: 1px solid rgba(134, 239, 172, .16);
+  border-radius: 8px;
+  color: #86efac;
+  font-size: 10px;
+  margin: 0;
+  padding: 7px 9px;
+}
+
+.git-workspace-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .git-file-scroll {
@@ -966,10 +1044,28 @@ select {
 .git-file-group li {
   align-items: center;
   background: rgba(7, 8, 21, .6);
+  border: 1px solid transparent;
   border-radius: 6px;
   display: flex;
+  gap: 6px;
+  padding: 4px;
+}
+
+.git-file-group li.selected {
+  border-color: rgba(103, 232, 249, .28);
+  background: rgba(103, 232, 249, .08);
+}
+
+.git-file-button {
+  align-items: center;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  display: flex;
+  flex: 1;
   gap: 8px;
-  padding: 5px 8px;
+  min-width: 0;
+  padding: 2px 4px;
 }
 
 .git-file-group li span {
@@ -1012,6 +1108,86 @@ select {
 .git-kind-conflicted {
   background: rgba(251, 113, 133, .16);
   color: #fb7185;
+}
+
+.git-row-action {
+  align-items: center;
+  background: rgba(15, 23, 42, .72);
+  border: 1px solid rgba(148, 163, 184, .12);
+  border-radius: 5px;
+  color: #afa8c7;
+  cursor: pointer;
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  gap: 4px;
+  padding: 4px 6px;
+}
+
+.git-row-action:hover {
+  border-color: rgba(103, 232, 249, .3);
+  color: #67e8f9;
+}
+
+.git-commit-box {
+  background: rgba(7, 8, 21, .58);
+  border: 1px solid rgba(74, 215, 240, .12);
+  border-radius: 8px;
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+}
+
+.git-commit-box label {
+  color: #afa8c7;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.git-commit-box textarea {
+  background: rgba(15, 23, 42, .82);
+  border: 1px solid rgba(148, 163, 184, .14);
+  border-radius: 6px;
+  color: #dfd5fd;
+  font: inherit;
+  font-size: 11px;
+  min-height: 48px;
+  padding: 7px;
+  resize: vertical;
+}
+
+.git-commit-box button {
+  justify-self: end;
+}
+
+.git-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  height: 222px;
+  overflow: auto;
+}
+
+.git-log-list article {
+  background: rgba(7, 8, 21, .6);
+  border: 1px solid rgba(74, 215, 240, .1);
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.git-log-list strong {
+  color: #dfd5fd;
+  font-size: 11px;
+}
+
+.git-log-list span {
+  color: #8f85a6;
+  font-family: SFMono-Regular, Consolas, Liberation Mono, monospace;
+  font-size: 9px;
 }
 
 .history-list {

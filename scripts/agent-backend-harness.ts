@@ -160,7 +160,7 @@ async function main() {
     role: "QA Engineer",
     cliId: "kiro",
     model: "claude-sonnet-4-5",
-    accent: "#8b5cf6",
+    accent: "#a78bfa",
     cwd: process.cwd(),
     interactive: true,
     forceTty: false,

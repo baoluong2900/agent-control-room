@@ -11,6 +11,7 @@ import type {
   KnowledgeLanguageStat,
   KnowledgeScanInput,
   KnowledgeSnapshot,
+  KnowledgeTruncationReport,
 } from "@contracts";
 import type { DesktopDatabase } from "../database/desktop-database";
 
@@ -23,8 +24,26 @@ type ScanCandidate = {
 
 type CollectResult = {
   files: ScanCandidate[];
-  skippedFiles: number;
+  filesSeen: number;
+  hitFileLimit: boolean;
+  skippedUnsupported: number;
+  skippedTooLarge: number;
+  skippedUnreadable: number;
+  largestSkipped: Array<{ path: string; bytes: number }>;
 };
+
+type TruncationAccumulator = Pick<
+  KnowledgeTruncationReport,
+  | "hitFileLimit"
+  | "filesSeen"
+  | "filesIndexed"
+  | "skippedUnsupported"
+  | "skippedTooLarge"
+  | "skippedBinary"
+  | "skippedUnreadable"
+  | "graphNodesDropped"
+  | "graphEdgesDropped"
+> & { largestSkipped: Array<{ path: string; bytes: number }> };
 
 const defaultMaxFiles = 800;
 const defaultMaxFileBytes = 180_000;
@@ -111,23 +130,48 @@ export class KnowledgeService {
     const maxFileBytes = clampInt(input.maxFileBytes ?? defaultMaxFileBytes, 20_000, 1_000_000);
     const collected = await collectFiles(projectPath, maxFiles, maxFileBytes);
     const files: KnowledgeFileInsight[] = [];
-    let skippedFiles = collected.skippedFiles;
+    const truncation: TruncationAccumulator = {
+      hitFileLimit: collected.hitFileLimit,
+      filesSeen: collected.filesSeen,
+      filesIndexed: 0,
+      skippedUnsupported: collected.skippedUnsupported,
+      skippedTooLarge: collected.skippedTooLarge,
+      skippedBinary: 0,
+      skippedUnreadable: collected.skippedUnreadable,
+      graphNodesDropped: 0,
+      graphEdgesDropped: 0,
+      largestSkipped: collected.largestSkipped,
+    };
 
     for (const candidate of collected.files) {
       const content = await fs.readFile(candidate.absolutePath, "utf8").catch(() => null);
-      if (content === null || looksBinary(content)) {
-        skippedFiles += 1;
+      if (content === null) {
+        truncation.skippedUnreadable += 1;
+        trackLargestSkipped(truncation.largestSkipped, candidate.relativePath, candidate.sizeBytes);
+        continue;
+      }
+      if (looksBinary(content)) {
+        truncation.skippedBinary += 1;
+        trackLargestSkipped(truncation.largestSkipped, candidate.relativePath, candidate.sizeBytes);
         continue;
       }
 
       files.push(analyzeFile(candidate, content));
     }
 
+    truncation.filesIndexed = files.length;
+    const graph = buildCodeGraph(files);
+    truncation.graphNodesDropped = graph.nodesDropped;
+    truncation.graphEdgesDropped = graph.edgesDropped;
+
+    const skippedFiles =
+      truncation.skippedUnsupported + truncation.skippedTooLarge + truncation.skippedBinary + truncation.skippedUnreadable;
+
     const snapshot: KnowledgeSnapshot = {
       projectPath,
       projectName: path.basename(projectPath),
       generatedAt: new Date().toISOString(),
-      totalFiles: files.length + skippedFiles,
+      totalFiles: truncation.filesSeen,
       indexedFiles: files.length,
       skippedFiles,
       totalBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0),
@@ -135,8 +179,9 @@ export class KnowledgeService {
       languages: languageStats(files),
       categories: categoryStats(files),
       files,
-      graph: buildCodeGraph(files),
+      graph: graph.graph,
       agentBrief: "",
+      truncation: shouldPersistTruncation(truncation) ? finalizeTruncation(truncation) : undefined,
     };
     snapshot.agentBrief = buildAgentBrief(snapshot);
 
@@ -159,15 +204,18 @@ export class KnowledgeService {
 
 async function collectFiles(root: string, maxFiles: number, maxFileBytes: number): Promise<CollectResult> {
   const files: ScanCandidate[] = [];
-  let skippedFiles = 0;
+  const largestSkipped: Array<{ path: string; bytes: number }> = [];
+  let filesSeen = 0;
+  let hitFileLimit = false;
+  let skippedUnsupported = 0;
+  let skippedTooLarge = 0;
+  let skippedUnreadable = 0;
 
   async function visit(directory: string): Promise<void> {
-    if (files.length >= maxFiles) return;
     const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
     const sorted = entries.slice().sort((a, b) => a.name.localeCompare(b.name));
 
     for (const entry of sorted) {
-      if (files.length >= maxFiles) return;
       if (entry.isSymbolicLink()) continue;
       const absolutePath = path.join(directory, entry.name);
       const relativePath = toPosix(path.relative(root, absolutePath));
@@ -179,14 +227,28 @@ async function collectFiles(root: string, maxFiles: number, maxFileBytes: number
       }
 
       if (!entry.isFile()) continue;
-      if (!isSupportedKnowledgeFile(entry.name, relativePath)) {
-        skippedFiles += 1;
+      filesSeen += 1;
+
+      if (files.length >= maxFiles) {
+        hitFileLimit = true;
         continue;
       }
 
       const stat = await fs.stat(absolutePath).catch(() => null);
-      if (!stat || stat.size > maxFileBytes) {
-        skippedFiles += 1;
+      if (!stat) {
+        skippedUnreadable += 1;
+        continue;
+      }
+
+      if (!isSupportedKnowledgeFile(entry.name, relativePath)) {
+        skippedUnsupported += 1;
+        trackLargestSkipped(largestSkipped, relativePath, stat.size);
+        continue;
+      }
+
+      if (stat.size > maxFileBytes) {
+        skippedTooLarge += 1;
+        trackLargestSkipped(largestSkipped, relativePath, stat.size);
         continue;
       }
 
@@ -200,7 +262,7 @@ async function collectFiles(root: string, maxFiles: number, maxFileBytes: number
   }
 
   await visit(root);
-  return { files, skippedFiles };
+  return { files, filesSeen, hitFileLimit, skippedUnsupported, skippedTooLarge, skippedUnreadable, largestSkipped };
 }
 
 function isSupportedKnowledgeFile(fileName: string, relativePath: string): boolean {
@@ -256,7 +318,7 @@ function categoryStats(files: KnowledgeFileInsight[]): KnowledgeCategoryStat[] {
   return [...map.values()].sort((a, b) => b.files - a.files || a.category.localeCompare(b.category));
 }
 
-function buildCodeGraph(files: KnowledgeFileInsight[]): KnowledgeCodeGraph {
+function buildCodeGraph(files: KnowledgeFileInsight[]): { graph: KnowledgeCodeGraph; nodesDropped: number; edgesDropped: number } {
   const nodes = new Map<string, KnowledgeGraphNode>();
   const edges = new Map<string, KnowledgeGraphEdge>();
   const filePaths = new Set(files.map((file) => file.path));
@@ -346,13 +408,16 @@ function buildCodeGraph(files: KnowledgeFileInsight[]): KnowledgeCodeGraph {
 
   const cappedNodes = [...nodes.values()].slice(0, 1_200);
   const retainedNodeIds = new Set(cappedNodes.map((node) => node.id));
-  const cappedEdges = [...edges.values()]
-    .filter((edge) => retainedNodeIds.has(edge.source) && retainedNodeIds.has(edge.target))
-    .slice(0, 2_400);
+  const survivingEdges = [...edges.values()].filter((edge) => retainedNodeIds.has(edge.source) && retainedNodeIds.has(edge.target));
+  const cappedEdges = survivingEdges.slice(0, 2_400);
 
   return {
-    nodes: cappedNodes,
-    edges: cappedEdges,
+    graph: {
+      nodes: cappedNodes,
+      edges: cappedEdges,
+    },
+    nodesDropped: Math.max(0, nodes.size - cappedNodes.length),
+    edgesDropped: Math.max(0, edges.size - cappedEdges.length),
   };
 }
 
@@ -571,6 +636,32 @@ function serializeSnapshot(snapshot: KnowledgeSnapshot, format: KnowledgeExportF
   return serializeMarkdown(snapshot);
 }
 
+function shouldPersistTruncation(report: TruncationAccumulator): boolean {
+  return report.hitFileLimit || report.skippedUnsupported > 0 || report.skippedTooLarge > 0 || report.skippedBinary > 0 || report.skippedUnreadable > 0 || report.graphNodesDropped > 0 || report.graphEdgesDropped > 0;
+}
+
+function finalizeTruncation(report: TruncationAccumulator): KnowledgeTruncationReport {
+  return {
+    hitFileLimit: report.hitFileLimit,
+    filesSeen: report.filesSeen,
+    filesIndexed: report.filesIndexed,
+    skippedUnsupported: report.skippedUnsupported,
+    skippedTooLarge: report.skippedTooLarge,
+    skippedBinary: report.skippedBinary,
+    skippedUnreadable: report.skippedUnreadable,
+    graphNodesDropped: report.graphNodesDropped,
+    graphEdgesDropped: report.graphEdgesDropped,
+    largestSkipped: report.largestSkipped.length > 0 ? report.largestSkipped.slice(0, 8) : undefined,
+  };
+}
+
+function trackLargestSkipped(target: Array<{ path: string; bytes: number }>, pathValue: string, bytes: number): void {
+  if (!Number.isFinite(bytes) || bytes <= 0) return;
+  target.push({ path: pathValue, bytes });
+  target.sort((left, right) => right.bytes - left.bytes || left.path.localeCompare(right.path));
+  if (target.length > 8) target.length = 8;
+}
+
 function serializeMarkdown(snapshot: KnowledgeSnapshot): string {
   const lines = [
     `# ${snapshot.projectName} CodeGraph Knowledgebase`,
@@ -578,7 +669,25 @@ function serializeMarkdown(snapshot: KnowledgeSnapshot): string {
     `Generated: ${snapshot.generatedAt}`,
     `Project: \`${snapshot.projectPath}\``,
     `Indexed: ${snapshot.indexedFiles}/${snapshot.totalFiles} files, ${snapshot.totalLines} lines`,
-    "",
+    snapshot.truncation ? "" : "",
+    snapshot.truncation ? "## Truncation Report" : "",
+    snapshot.truncation
+      ? `- Hit file limit: ${yesNo(snapshot.truncation.hitFileLimit)}`
+      : "",
+    snapshot.truncation ? `- Files seen: ${snapshot.truncation.filesSeen}` : "",
+    snapshot.truncation ? `- Files indexed: ${snapshot.truncation.filesIndexed}` : "",
+    snapshot.truncation ? `- Skipped unsupported: ${snapshot.truncation.skippedUnsupported}` : "",
+    snapshot.truncation ? `- Skipped too large: ${snapshot.truncation.skippedTooLarge}` : "",
+    snapshot.truncation ? `- Skipped binary: ${snapshot.truncation.skippedBinary}` : "",
+    snapshot.truncation ? `- Skipped unreadable: ${snapshot.truncation.skippedUnreadable}` : "",
+    snapshot.truncation ? `- Graph nodes dropped: ${snapshot.truncation.graphNodesDropped}` : "",
+    snapshot.truncation ? `- Graph edges dropped: ${snapshot.truncation.graphEdgesDropped}` : "",
+    snapshot.truncation?.largestSkipped?.length
+      ? `- Largest skipped: ${snapshot.truncation.largestSkipped
+          .map((item) => `${item.path} (${formatBytes(item.bytes)})`)
+          .join(", ")}`
+      : "",
+    snapshot.truncation ? "" : "",
     "## Agent Brief",
     "",
     snapshot.agentBrief,
@@ -628,6 +737,11 @@ function serializeXml(snapshot: KnowledgeSnapshot): string {
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<knowledgebase project="${xmlEscape(snapshot.projectName)}" generatedAt="${xmlEscape(snapshot.generatedAt)}">`,
     `  <summary indexedFiles="${snapshot.indexedFiles}" totalFiles="${snapshot.totalFiles}" skippedFiles="${snapshot.skippedFiles}" totalLines="${snapshot.totalLines}" totalBytes="${snapshot.totalBytes}" />`,
+    ...(snapshot.truncation
+      ? [
+          `  <truncation hitFileLimit="${snapshot.truncation.hitFileLimit}" filesSeen="${snapshot.truncation.filesSeen}" filesIndexed="${snapshot.truncation.filesIndexed}" skippedUnsupported="${snapshot.truncation.skippedUnsupported}" skippedTooLarge="${snapshot.truncation.skippedTooLarge}" skippedBinary="${snapshot.truncation.skippedBinary}" skippedUnreadable="${snapshot.truncation.skippedUnreadable}" graphNodesDropped="${snapshot.truncation.graphNodesDropped}" graphEdgesDropped="${snapshot.truncation.graphEdgesDropped}" />`,
+        ]
+      : []),
     `  <agentBrief>${xmlEscape(snapshot.agentBrief)}</agentBrief>`,
     "  <categories>",
     ...snapshot.categories.map(
@@ -722,6 +836,10 @@ function titleCase(value: string): string {
   return value
     .replace(/[-_]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function yesNo(value: boolean): string {
+  return value ? "yes" : "no";
 }
 
 function formatBytes(bytes: number): string {

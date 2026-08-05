@@ -410,3 +410,90 @@ test("identity save defaults to signed-in and round-trips through the database",
 
   db.close();
 });
+
+/** Records the endpoints a gateway verification probed, with a canned answer. */
+function createEndpointProbe(result: { reachable: boolean; statusCode?: number; detail?: string }) {
+  const probed: string[] = [];
+  return {
+    probed,
+    probe: async (baseUrl: string) => {
+      probed.push(baseUrl);
+      return result;
+    },
+  };
+}
+
+test("a hermes-agent connection defaults to the local proxy endpoint and verifies by reaching it", async () => {
+  const dir = tempDir("settings-verify-hermes-ok");
+  const db = await DesktopDatabase.open(dir);
+  const cli = createCliProbe(false, "should not be probed");
+  const endpoint = createEndpointProbe({ reachable: true, statusCode: 200 });
+  const service = new SettingsService(
+    db,
+    new ProviderSecretVault(dir, createStorage()),
+    createLinkOpener(),
+    cli.probe,
+    endpoint.probe,
+  );
+
+  // No base URL is typed: the proxy's own default is what the runtime will use.
+  const created = service.saveProviderConnection({ provider: "hermes-agent", accountLabel: "Hermes proxy" });
+  assert.equal(created.status, "unverified", "a save is not a check");
+
+  const result = await service.verifyProviderConnection(created.id);
+
+  assert.equal(result.outcome, "verified");
+  assert.equal(result.status, "connected");
+  assert.deepEqual(endpoint.probed, ["http://127.0.0.1:8645/v1"], "falls back to the documented proxy address");
+  assert.deepEqual(cli.probed, [], "a gateway has no first-party CLI to probe");
+  assert.equal(service.listProviderConnections()[0].status, "connected");
+
+  db.close();
+});
+
+test("a hermes-agent connection whose proxy is down is disconnected, not silently connected", async () => {
+  const dir = tempDir("settings-verify-hermes-down");
+  const db = await DesktopDatabase.open(dir);
+  const endpoint = createEndpointProbe({ reachable: false, detail: "ECONNREFUSED" });
+  const service = new SettingsService(
+    db,
+    new ProviderSecretVault(dir, createStorage()),
+    createLinkOpener(),
+    createCliProbe(true).probe,
+    endpoint.probe,
+  );
+
+  const created = service.saveProviderConnection({
+    provider: "hermes-agent",
+    baseUrl: "http://127.0.0.1:9999/v1",
+  });
+  const result = await service.verifyProviderConnection(created.id);
+
+  assert.equal(result.status, "disconnected");
+  assert.deepEqual(endpoint.probed, ["http://127.0.0.1:9999/v1"], "an explicit endpoint wins over the default");
+  assert.match(result.detail, /hermes proxy start/, "the fix is named in the failure text");
+
+  db.close();
+});
+
+test("a hermes-agent proxy that answers 401 is expired rather than unreachable", async () => {
+  const dir = tempDir("settings-verify-hermes-401");
+  const db = await DesktopDatabase.open(dir);
+  const service = new SettingsService(
+    db,
+    new ProviderSecretVault(dir, createStorage()),
+    createLinkOpener(),
+    createCliProbe(true).probe,
+    createEndpointProbe({ reachable: true, statusCode: 401 }).probe,
+  );
+
+  const created = service.saveProviderConnection({ provider: "hermes-agent" });
+  const result = await service.verifyProviderConnection(created.id);
+
+  // The proxy being up is the part this app controls; the upstream login is not.
+  assert.equal(result.outcome, "missing-credential");
+  assert.equal(result.status, "expired");
+  assert.match(result.detail, /hermes proxy status/);
+
+  db.close();
+});

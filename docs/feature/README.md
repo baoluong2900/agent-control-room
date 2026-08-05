@@ -7,6 +7,11 @@ Mỗi file trong thư mục này là kế hoạch triển khai cho **một chứ
 
 Ngày verify: **2026-08-04**, tại commit `0a434f1` (`feat: add schema migrations, provider verification, and step chaining`).
 
+Re-verify **2026-08-05**: mọi gap trong bảng dưới đã được grep lại trên source hiện
+tại và vẫn đúng. Chi tiết bằng chứng trong `docs/audit-2026-08-05.md`, cùng một bug
+runtime đã tìm ra và sửa trong lần rà soát đó (spawn-window trong
+`AgentProcessManager` khiến `stop()` không có tác dụng và concurrency limit bị vượt).
+
 ## Cách đọc một file plan
 
 Mỗi plan có cùng cấu trúc:
@@ -20,37 +25,46 @@ Mỗi plan có cùng cấu trúc:
 | Test | File test cần thêm, và phải đăng ký vào `test:workflows` |
 | Acceptance | Checklist verify được, không phải "cảm giác xong" |
 
-## Bảng ưu tiên
+## Plan chưa hoàn thành
 
 Thứ tự này tính theo **giá trị / rủi ro**, không phải theo độ khó. Các mục P0 là chỗ UI đang hứa nhiều hơn runtime — người dùng bị đánh lừa, nên sửa trước.
 
 | # | Plan | Mức | Effort | Vấn đề một dòng |
 | --- | --- | --- | --- | --- |
-| 01 | [workflow-triggers.md](workflow-triggers.md) | **P0** | M | 4/6 trigger được chọn trong UI nhưng không có runner nào chạy |
-| 02 | [provider-connection-truth.md](provider-connection-truth.md) | **P0** | S | Verify backend đã xong, nhưng Connect vẫn tự ghi `connected` không cần check |
-| 03 | [workflow-step-profile-binding.md](workflow-step-profile-binding.md) | **P0** | S | Backend bind agent profile vào step đã xong, editor không có picker → save là **mất dữ liệu** |
-| 04 | [git-workspace.md](git-workspace.md) | P1 | M | Git panel chỉ xem được `--stat`, không xem được hunk; không có write op |
+| 01 | [workflow-triggers.md](workflow-triggers.md) | **Residual/P0** | M | Local file-change chạy được; remote `git-push`/issue/webhook runners vẫn chưa có |
+| 02 | [provider-connection-truth.md](provider-connection-truth.md) | **Residual/P0** | S | Local verification đã có; OAuth/device token flow thật vẫn chưa có |
 | 05 | [knowledge-index.md](knowledge-index.md) | P1 | L | Full rescan mỗi lần, regex thay vì AST, alias `@contracts` bị coi là external |
-| 06 | [knowledge-truncation-report.md](knowledge-truncation-report.md) | P1 | S | Cột `truncation_json` đã migrate nhưng luôn NULL; cap cắt dữ liệu im lặng |
-| 07 | [agent-lifecycle.md](agent-lifecycle.md) | P1 | M | Không có restart/concurrency limit; SIGTERM không escalate |
-| 08 | [terminal-log-retention.md](terminal-log-retention.md) | P1 | S | `terminal_logs` không bao giờ bị xoá → SQLite phình vô hạn |
-| 09 | [workflow-metrics-delta.md](workflow-metrics-delta.md) | P2 | S | 4 field delta có type + UI nhưng service không tính → UI chết vĩnh viễn |
-| 10 | [task-retry-policy.md](task-retry-policy.md) | P2 | M | Không có attempt/backoff; task fail trước khi ghi DB bị retry mỗi 30s vô hạn |
+| 07 | [agent-lifecycle.md](agent-lifecycle.md) | **Partial done** | M | Restart and concurrency queue landed; SIGTERM escalation remains future hardening |
 | 11 | [task-ai-planner.md](task-ai-planner.md) | P2 | M | Planner là word-count heuristic, gán CLI hardcode không cần biết CLI có tồn tại |
-| 12 | [structured-chat-capability.md](structured-chat-capability.md) | P2 | S | Resume chat hardcode `claude`/`agy` trong 3 hàm thay vì flag trong catalog |
-| 13 | [workflow-schema-versioning.md](workflow-schema-versioning.md) | P2 | S | `workflow-repository` còn 25 `ensureColumns`, nằm ngoài `schema_migrations` |
-| 14 | [diagnostics-tiers.md](diagnostics-tiers.md) | P2 | M | Diagnostics chỉ check `--version`, không check auth/quota/ghi được folder |
 | 15 | [ai-gateway-sidecar.md](ai-gateway-sidecar.md) | P3 | XL | `docs/aiagnet.md` mô tả local router, runtime không có server nào listen port |
+
+## Completed archive
+
+Các plan hoàn thành được chuyển sang [`done/`](done/README.md), để thư mục
+`docs/feature/` chỉ còn backlog chưa xong hoặc còn residual.
+
+| # | Plan | Trạng thái |
+| --- | --- | --- |
+| 03 | [Workflow step profile binding](done/workflow-step-profile-binding.md) | Done |
+| 04 | [Git workspace MVP](done/git-workspace.md) | Done/MVP |
+| 06 | [Knowledge truncation report](done/knowledge-truncation-report.md) | Done |
+| 08 | [Terminal log retention](done/terminal-log-retention.md) | Done |
+| 09 | [Workflow metrics delta](done/workflow-metrics-delta.md) | Done |
+| 10 | [Task retry policy](done/task-retry-policy.md) | Done |
+| 12 | [Structured chat capability](done/structured-chat-capability.md) | Done |
+| 13 | [Workflow schema versioning](done/workflow-schema-versioning.md) | Done |
+| 14 | [Diagnostics tiers](done/diagnostics-tiers.md) | Done/MVP |
+| — | [Hermes Agent gateway provider](done/hermes-agent-provider.md) | Done |
 
 Effort: S = dưới 1 ngày, M = 1–3 ngày, L = 1 tuần, XL = nhiều tuần / cần quyết định sản phẩm.
 
 ## Thứ tự làm đề xuất
 
-**Sprint 1 — dừng chảy máu (UI đang nói dối).** Plan 03 trước tiên vì nó là data-loss bug đang tồn tại, rồi 02 (một dòng đổi status + đã có sẵn nút Verify đang làm dở), rồi 01 phase 1 (disable trigger chưa chạy). Cả ba đều nhỏ và loại bỏ hiểu nhầm ngay.
+**Sprint 1 — dừng chảy máu (UI đang nói dối).** Plan 03, 02, và phần gating của 01 đã xong: step binding không còn mất dữ liệu, provider không còn tự nhận connected trước verify, và trigger chưa hỗ trợ không còn được bán như automation thật. Residual của 01/02 là remote runners và OAuth/device token flow.
 
-**Sprint 2 — làm cho panel dùng được hằng ngày.** Plan 04 phase 1 (patch viewer), 06 (truncation report), 08 (log retention). Đây là các mục người dùng cảm nhận được ngay mà không cần đổi kiến trúc.
+**Sprint 2 — làm cho panel dùng được hằng ngày.** Plan 04 (Git workspace MVP), 06 (truncation report), và 08 (log retention) đã xong. Git còn các operation nâng cao như stash/branch/push/conflict UX, nhưng patch/stage/commit path đã dùng được hằng ngày.
 
-**Sprint 3 — độ tin cậy.** Plan 07, 10, 13. Sau sprint này scheduler và agent runtime chịu được hàng đợi dài và lỗi tạm thời.
+**Sprint 3 — độ tin cậy.** Plan 10 và 13 đã xong: scheduler không còn spam retry mỗi 30 giây và mọi schema change của workflow đi qua `schema_migrations`. Plan 07 đã có restart + concurrency queue, chỉ còn kill escalation.
 
 **Sprint 4+ — nâng chất lượng lõi.** Plan 05 (AST index) là mục lớn nhất và nên làm sau khi 06 đã cho thấy scan bỏ sót bao nhiêu. Plan 15 cần quyết định sản phẩm trước khi viết code.
 

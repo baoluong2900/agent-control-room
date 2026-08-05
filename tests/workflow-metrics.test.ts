@@ -20,9 +20,8 @@ function daysAgo(days: number): string {
 
 function freshService(): { service: WorkflowService; repo: WorkflowRepository } {
   const db = new DatabaseSync(":memory:");
-  const repo = new WorkflowRepository(db as never);
-  repo.migrate();
-  // `migrate()` installs demo workflows. Unlike the other suites, which only ever
+  const repo = WorkflowRepository.bootstrap(db as never);
+  // Bootstrapping installs demo workflows. Unlike the other suites, which only ever
   // assert on their own rows, metrics aggregates the whole database — so the seeds
   // would land in every count here. Drop them for a genuinely empty baseline.
   db.exec("delete from workflow_runs");
