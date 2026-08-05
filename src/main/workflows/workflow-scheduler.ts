@@ -2,6 +2,7 @@ import fs, { type FSWatcher } from "node:fs";
 import path from "node:path";
 import type { WebContents } from "electron";
 import type { WorkflowDefinition, WorkflowEvent } from "@contracts";
+import { git } from "../git/git-service";
 import type { WorkflowService } from "./workflow-service";
 import { parseSchedule, previousOccurrence } from "./workflow-schedule";
 
@@ -10,6 +11,15 @@ type SchedulerOptions = {
 };
 
 const FILE_CHANGE_DEBOUNCE_MS = 1_000;
+
+/**
+ * Quiet period after a ref-change run before that workflow can fire again.
+ *
+ * A workflow whose steps commit would otherwise observe its own commit on the next
+ * tick and fire forever. The cooldown is longer than the poll interval so a
+ * self-caused commit is always swallowed.
+ */
+const REF_CHANGE_COOLDOWN_MS = 90_000;
 
 /**
  * Fires locally runnable workflow triggers: friendly schedules and project file
@@ -25,6 +35,8 @@ const FILE_CHANGE_DEBOUNCE_MS = 1_000;
 export class WorkflowSchedulerService {
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
+  /** Guards the ref poll, which spawns git and can outlast a fast tick interval. */
+  private refPolling = false;
   private startedAt = new Date();
   /** Guards against re-firing the same schedule slot when a run is slow to record. */
   private readonly lastFiredFor = new Map<string, number>();
@@ -32,19 +44,29 @@ export class WorkflowSchedulerService {
   private readonly fileWatchers = new Map<string, FSWatcher>();
   /** Workflow id -> last accepted file-change run time. */
   private readonly lastFileChangeFor = new Map<string, number>();
+  /** `<root>@<branch>` -> last observed commit SHA. Seeded, never fired on, at boot. */
+  private readonly lastRefSha = new Map<string, string>();
+  /** Workflow id -> last accepted ref-change run time, for the self-commit cooldown. */
+  private readonly lastRefRunFor = new Map<string, number>();
 
   constructor(
     private readonly workflows: WorkflowService,
     private readonly webContentsProvider: () => WebContents | null,
+    /** Injection seam for tests: runs one git command in `cwd`. */
+    private readonly runGit: (cwd: string, args: string[]) => Promise<{ ok: boolean; output: string }> = git,
   ) {}
 
   start(options: SchedulerOptions = {}): void {
     if (this.timer) return;
     this.startedAt = new Date();
     this.refreshFileWatchers();
+    // Seed ref SHAs before the first tick: without this, every ref-change workflow
+    // fires once on launch simply because the app had never seen its HEAD before.
+    void this.seedRefBaselines();
     const intervalMs = Math.max(15_000, options.intervalMs ?? 60_000);
     this.timer = setInterval(() => {
       void this.runDueWorkflows();
+      void this.runRefChangeWorkflows();
       this.refreshFileWatchers();
     }, intervalMs);
   }
@@ -107,6 +129,107 @@ export class WorkflowSchedulerService {
     }
 
     return fired;
+  }
+
+  /**
+   * Runs every active `git-push` workflow whose tracked ref moved since last poll.
+   *
+   * Named `git-push` for backward compatibility with saved workflows, but what is
+   * actually detected is *any* ref change — commit, merge, rebase, amend, or pull.
+   * When a `remote` is configured in `trigger.detail` the remote-tracking ref is
+   * watched instead, which is the closest local approximation of "was pushed".
+   */
+  async runRefChangeWorkflows(now = new Date()): Promise<string[]> {
+    if (this.refPolling) return [];
+    this.refPolling = true;
+    const fired: string[] = [];
+
+    try {
+      for (const workflow of this.workflows.list()) {
+        if (!this.isRefChangeCandidate(workflow)) continue;
+
+        const root = path.resolve(workflow.projectPath as string);
+        const config = parseRefTrigger(workflow.trigger.detail);
+        const ref = config.remote ? `refs/remotes/${config.remote}/${config.branch ?? "HEAD"}` : config.branch ?? "HEAD";
+
+        const sha = await this.resolveRef(root, ref);
+        if (!sha) continue;
+
+        const key = `${root}@${ref}`;
+        const previous = this.lastRefSha.get(key);
+        // Always record first: a poll that observes a new SHA and then fails to run
+        // must not re-fire the same commit on the next tick.
+        this.lastRefSha.set(key, sha);
+
+        // Unknown ref means this is the baseline observation, not a change. Firing
+        // here would run every workflow once whenever the app restarts.
+        if (previous === undefined || previous === sha) continue;
+
+        if (config.branch && !config.remote) {
+          const current = (await this.runGit(root, ["branch", "--show-current"])).output.trim();
+          // A branch filter means "only when this branch moves"; a checkout to
+          // another branch changes HEAD but is not a change to the watched branch.
+          if (current && current !== config.branch) continue;
+        }
+
+        const lastRun = this.lastRefRunFor.get(workflow.id);
+        // `undefined`, not `0`, means "never ran". A sentinel of 0 makes the cooldown
+        // compare against the epoch, which blocks the very first run whenever `now`
+        // is small — real with an injected clock, and a latent trap besides.
+        if (lastRun !== undefined && now.getTime() - lastRun < REF_CHANGE_COOLDOWN_MS) continue;
+        this.lastRefRunFor.set(workflow.id, now.getTime());
+        this.emit(workflow, `🔀 ${ref} moved to ${sha.slice(0, 8)}`);
+
+        try {
+          await this.workflows.run({ workflowId: workflow.id, triggeredBy: "git-push" });
+          fired.push(workflow.id);
+        } catch (error) {
+          this.emitFailure(workflow, error, "Ref-change run");
+        }
+      }
+    } finally {
+      this.refPolling = false;
+    }
+
+    return fired;
+  }
+
+  /**
+   * Records the current SHA of every watched ref without firing anything.
+   *
+   * This is what makes "changed since the app was last looking" the trigger, rather
+   * than "the app has not seen this SHA before".
+   */
+  async seedRefBaselines(): Promise<void> {
+    for (const workflow of this.workflows.list()) {
+      if (!this.isRefChangeCandidate(workflow)) continue;
+      const root = path.resolve(workflow.projectPath as string);
+      const config = parseRefTrigger(workflow.trigger.detail);
+      const ref = config.remote ? `refs/remotes/${config.remote}/${config.branch ?? "HEAD"}` : config.branch ?? "HEAD";
+      const key = `${root}@${ref}`;
+      if (this.lastRefSha.has(key)) continue;
+      const sha = await this.resolveRef(root, ref);
+      if (sha) this.lastRefSha.set(key, sha);
+    }
+  }
+
+  private isRefChangeCandidate(workflow: WorkflowDefinition): boolean {
+    return (
+      workflow.status === "active" &&
+      workflow.trigger.type === "git-push" &&
+      Boolean(workflow.projectPath) &&
+      workflow.steps.some((step) => step.enabled)
+    );
+  }
+
+  /** The SHA a ref points at, or null when the repo or ref does not resolve. */
+  private async resolveRef(root: string, ref: string): Promise<string | null> {
+    const result = await this.runGit(root, ["rev-parse", ref]);
+    if (!result.ok) return null;
+    const sha = result.output.trim().split(/\s+/)[0] ?? "";
+    // `rev-parse` echoes the input back when it cannot resolve it, so a value that
+    // is not a hex object id means "no such ref" rather than a real SHA.
+    return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
   }
 
   /** The scheduled moment this workflow owes a run for, or null when it is current. */
@@ -223,6 +346,42 @@ export class WorkflowSchedulerService {
       timestamp: new Date().toISOString(),
     } satisfies WorkflowEvent);
   }
+}
+
+/**
+ * Reads a `git-push` trigger's `detail` field.
+ *
+ * `detail` is free text for backward compatibility, so this accepts what users
+ * plausibly typed rather than demanding a schema: a bare branch (`main`), a
+ * remote-qualified ref (`origin/main`), or `key=value` pairs
+ * (`branch=main, remote=origin`). Anything unparseable degrades to watching HEAD,
+ * which is the behaviour of an unconfigured trigger.
+ */
+export function parseRefTrigger(detail?: string | null): { branch?: string; remote?: string } {
+  const text = detail?.trim();
+  if (!text) return {};
+
+  if (text.includes("=")) {
+    const config: { branch?: string; remote?: string } = {};
+    for (const part of text.split(/[,\n]/)) {
+      const [rawKey, ...rest] = part.split("=");
+      const key = rawKey?.trim().toLowerCase();
+      const value = rest.join("=").trim();
+      if (!key || !value) continue;
+      if (key === "branch" || key === "ref") config.branch = value;
+      else if (key === "remote") config.remote = value;
+    }
+    return config;
+  }
+
+  // `origin/main` is the shape people write for "the pushed branch", so treat a
+  // single slash as remote/branch rather than as a branch literally named that.
+  const slash = text.indexOf("/");
+  if (slash > 0 && !text.includes(" ")) {
+    return { remote: text.slice(0, slash), branch: text.slice(slash + 1) };
+  }
+
+  return { branch: text };
 }
 
 function normalizeFilter(filter: string): string {

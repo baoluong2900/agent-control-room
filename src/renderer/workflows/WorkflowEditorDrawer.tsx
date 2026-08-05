@@ -25,6 +25,7 @@ import {
   stepKinds,
   triggerMeta,
   triggerTypes,
+  triggerDetailHelp,
   unsupportedTriggerCopy,
 } from "./workflow-ui";
 import { useAgentsStore } from "../stores/agents-store";
@@ -337,14 +338,18 @@ export function WorkflowEditorDrawer({
                 <span>Detail</span>
                 <input
                   value={draft.triggerDetail}
-                  placeholder={draft.triggerType === "file-change" ? "src/**, package.json" : "GitHub • main, Jira • BUG board…"}
+                  placeholder={
+                    draft.triggerType === "file-change"
+                      ? "src/**, package.json"
+                      : draft.triggerType === "git-push"
+                        ? "main, or origin/main"
+                        : "GitHub • main, Jira • BUG board…"
+                  }
                   onChange={(event) => patch({ triggerDetail: event.target.value })}
                 />
               </label>
-              {draft.triggerType === "file-change" ? (
-                <p className="wf-field-hint wf-col-2">
-                  Watches the project folder above. Detail is optional; use comma-separated relative files or globs.
-                </p>
+              {triggerDetailHelp[draft.triggerType] ? (
+                <p className="wf-field-hint wf-col-2">{triggerDetailHelp[draft.triggerType]}</p>
               ) : unsupportedTriggerCopy[draft.triggerType] ? (
                 <p className="wf-field-hint wf-col-2">{unsupportedTriggerCopy[draft.triggerType]}</p>
               ) : null}

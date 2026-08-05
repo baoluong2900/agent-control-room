@@ -57,7 +57,10 @@ test("cli, trigger, status and run-status metadata are complete", () => {
   assert.equal(cliLabels.claude, "Claude");
   assert.equal(cliLabels.shell, "Shell");
 
-  assert.equal(triggerMeta["git-push"].label, "On Push");
+  // Deliberately not "On Push": the runner polls local refs, so it fires on any ref
+  // change (commit/merge/rebase/pull). Calling it "On Push" would promise remote
+  // push detection the app cannot do without a webhook.
+  assert.equal(triggerMeta["git-push"].label, "On Ref Change");
   assert.equal(statusMeta.active.accent, "green");
   assert.equal(statusMeta.paused.accent, "amber");
 
@@ -93,5 +96,7 @@ test("scheduled seeds carry a schedule the parser can use", () => {
     if (seed.trigger.type !== "schedule") continue;
     assert.ok(seed.trigger.schedule?.trim(), `seed ${seed.id} is scheduled but has no schedule string`);
   }
-  assert.deepEqual(locallyRunnableTriggerTypes, ["manual", "schedule", "file-change"]);
+  // `git-push` joined this list once the local ref-poll runner landed; the two that
+  // remain out need inbound HTTP or provider credentials, which the app has neither of.
+  assert.deepEqual(locallyRunnableTriggerTypes, ["manual", "schedule", "file-change", "git-push"]);
 });

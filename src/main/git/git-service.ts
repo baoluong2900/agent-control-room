@@ -261,7 +261,14 @@ function unquote(pathValue: string): string {
   return pathValue.startsWith('"') && pathValue.endsWith('"') ? pathValue.slice(1, -1) : pathValue;
 }
 
-function git(cwd: string, args: string[]): Promise<GitResult> {
+/**
+ * Runs one git command and never rejects.
+ *
+ * Exported so other main-process services (the ref-change trigger runner) reuse
+ * this exact invocation — same 5s timeout, same never-throw contract — rather than
+ * growing a second, subtly different git helper.
+ */
+export function git(cwd: string, args: string[]): Promise<GitResult> {
   return new Promise((resolve) => {
     const child = spawn("git", args, {
       cwd,

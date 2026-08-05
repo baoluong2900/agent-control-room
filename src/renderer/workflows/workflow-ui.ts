@@ -43,7 +43,10 @@ export const stepKinds = Object.keys(stepKindMeta) as WorkflowStepKind[];
 export const triggerMeta: Record<WorkflowTriggerType, { label: string; icon: LucideIcon }> = {
   manual: { label: "Manual", icon: Play },
   schedule: { label: "Scheduled", icon: Clock3 },
-  "git-push": { label: "On Push", icon: GitBranch },
+  // Named "On Push" for compatibility with saved workflows, but the runner detects
+  // any ref change (commit, merge, rebase, pull). The label says so to avoid
+  // promising remote push detection the app cannot do without a webhook.
+  "git-push": { label: "On Ref Change", icon: GitBranch },
   "file-change": { label: "On File Change", icon: Workflow },
   "issue-created": { label: "On Issue", icon: Bell },
   webhook: { label: "Webhook", icon: Terminal },
@@ -51,12 +54,23 @@ export const triggerMeta: Record<WorkflowTriggerType, { label: string; icon: Luc
 
 export const triggerTypes = Object.keys(triggerMeta) as WorkflowTriggerType[];
 
-export const locallyRunnableTriggerTypes: WorkflowTriggerType[] = ["manual", "schedule", "file-change"];
+export const locallyRunnableTriggerTypes: WorkflowTriggerType[] = [
+  "manual",
+  "schedule",
+  "file-change",
+  "git-push",
+];
 
 export const unsupportedTriggerCopy: Partial<Record<WorkflowTriggerType, string>> = {
-  "git-push": "Git push needs a Git provider webhook before it can run locally.",
   "issue-created": "Issue-created needs a tracker integration before it can run locally.",
   webhook: "Webhook needs an inbound HTTP listener before it can run locally.",
+};
+
+/** Explains what `trigger.detail` does, per trigger type, in the editor. */
+export const triggerDetailHelp: Partial<Record<WorkflowTriggerType, string>> = {
+  "file-change": "Comma-separated paths or globs, e.g. src/**, package.json. Empty watches the whole project.",
+  "git-push":
+    "Empty polls HEAD. A branch name (main) watches that branch; origin/main watches the remote-tracking ref, which is the closest local signal for “was pushed”.",
 };
 
 export function isLocallyRunnableTrigger(type: WorkflowTriggerType): boolean {
