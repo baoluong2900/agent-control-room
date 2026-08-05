@@ -92,6 +92,7 @@ export type {
 export type {
   WorkflowActivityEntry,
   WorkflowActivityKind,
+  WebhookEndpointStatus,
   WorkflowDefinition,
   WorkflowEvent,
   WorkflowEventType,

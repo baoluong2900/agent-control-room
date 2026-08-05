@@ -13,6 +13,7 @@ import type {
   TaskSaveInput,
   TaskStatus,
   WorkflowRunOptions,
+  WebhookEndpointStatus,
   WorkflowSaveInput,
   WorkflowStatus,
 } from "@contracts";
@@ -32,9 +33,21 @@ import { AgentProcessManager } from "../processes/agent-process-manager";
 import { ProjectService } from "../projects/project-service";
 import type { SettingsService } from "../settings/settings-service";
 import type { TaskAutomationService } from "../tasks/task-automation-service";
+import type { WebhookCoordinator } from "../workflows/webhook-coordinator";
 import type { WorkflowSchedulerService } from "../workflows/workflow-scheduler";
 import type { WorkflowService } from "../workflows/workflow-service";
 import { collectDiagnostics } from "./diagnostics";
+
+/**
+ * Listener status plus the token the user needs to configure a sender.
+ *
+ * The token is only minted when it is actually going to be shown; asking for status
+ * should not create a credential as a side effect if the feature is unused.
+ */
+function describeWebhook(coordinator: WebhookCoordinator): WebhookEndpointStatus {
+  const status = coordinator.status();
+  return { ...status, token: status.running ? coordinator.ensureToken() : null };
+}
 
 export function registerIpcHandlers({
   agentProcessManager,
@@ -43,6 +56,7 @@ export function registerIpcHandlers({
   projectService,
   settingsService,
   taskAutomationService,
+  webhookCoordinator,
   workflowSchedulerService,
   workflowService,
 }: {
@@ -52,6 +66,7 @@ export function registerIpcHandlers({
   projectService: ProjectService;
   settingsService: SettingsService;
   taskAutomationService: TaskAutomationService;
+  webhookCoordinator: WebhookCoordinator;
   workflowSchedulerService: WorkflowSchedulerService;
   workflowService: WorkflowService;
 }): void {
@@ -124,6 +139,20 @@ export function registerIpcHandlers({
   );
   ipcMain.handle("workflow:run", (_event, options: WorkflowRunOptions) => workflowService.run(options));
   ipcMain.handle("workflow:run-due", () => workflowSchedulerService.runDueWorkflows());
+  ipcMain.handle("workflow:webhook-status", async () => {
+    // Sync first: the user may have just enabled a webhook workflow, and opening the
+    // panel should show the resulting endpoint rather than the pre-edit state.
+    await webhookCoordinator.sync();
+    return describeWebhook(webhookCoordinator);
+  });
+  ipcMain.handle("workflow:rotate-webhook-token", async () => {
+    webhookCoordinator.rotateToken();
+    // The running listener still holds the old token, so it has to be rebound for
+    // the rotation to take effect.
+    await webhookCoordinator.stop();
+    await webhookCoordinator.sync();
+    return describeWebhook(webhookCoordinator);
+  });
   ipcMain.handle("workflow:cancel", (_event, workflowRunId: string) => workflowService.cancel(workflowRunId));
   ipcMain.handle("workflow:approve", (_event, workflowRunId: string) => workflowService.approve(workflowRunId));
   ipcMain.handle("workflow:reject", (_event, workflowRunId: string, reason?: string) =>

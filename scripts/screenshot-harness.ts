@@ -18,6 +18,7 @@ import { ProviderSecretVault } from "../src/main/settings/provider-secret-vault"
 import { SettingsService } from "../src/main/settings/settings-service";
 import { KnowledgeService } from "../src/main/knowledge/knowledge-service";
 import { TaskAutomationService } from "../src/main/tasks/task-automation-service";
+import { WebhookCoordinator } from "../src/main/workflows/webhook-coordinator";
 import { WorkflowSchedulerService } from "../src/main/workflows/workflow-scheduler";
 import { WorkflowService } from "../src/main/workflows/workflow-service";
 
@@ -52,16 +53,24 @@ async function main() {
   const taskAutomationService = new TaskAutomationService(database, manager, () => window?.webContents ?? null);
   const workflowService = new WorkflowService(database, () => window?.webContents ?? null);
   const workflowSchedulerService = new WorkflowSchedulerService(workflowService, () => window?.webContents ?? null);
+  const harnessVault = new ProviderSecretVault(userDataPath, harnessSecretStorage);
+  const webhookCoordinator = new WebhookCoordinator(
+    database,
+    harnessVault,
+    workflowSchedulerService,
+    () => window?.webContents ?? null,
+  );
   registerIpcHandlers({
     agentProcessManager: manager,
     database,
     knowledgeService: new KnowledgeService(database),
     projectService: new ProjectService(database),
     // Harness never opens a real browser window.
-    settingsService: new SettingsService(database, new ProviderSecretVault(userDataPath, harnessSecretStorage), {
+    settingsService: new SettingsService(database, harnessVault, {
       openExternal: async () => {},
     }),
     taskAutomationService,
+    webhookCoordinator,
     workflowSchedulerService,
     workflowService,
   });

@@ -8,6 +8,12 @@ import { parseSchedule, previousOccurrence } from "./workflow-schedule";
 
 type SchedulerOptions = {
   intervalMs?: number;
+  /**
+   * Runs each tick after the trigger passes. The webhook coordinator uses this to
+   * open or close its port as webhook workflows are enabled, disabled, or deleted,
+   * so those edits take effect without restarting the app.
+   */
+  onSync?: () => void | Promise<unknown>;
 };
 
 const FILE_CHANGE_DEBOUNCE_MS = 1_000;
@@ -20,6 +26,14 @@ const FILE_CHANGE_DEBOUNCE_MS = 1_000;
  * self-caused commit is always swallowed.
  */
 const REF_CHANGE_COOLDOWN_MS = 90_000;
+
+/**
+ * Quiet period between webhook runs of the same workflow.
+ *
+ * Providers retry deliveries they consider failed, and "redeliver" is one click in
+ * most dashboards, so the same logical event can arrive several times.
+ */
+const WEBHOOK_DEBOUNCE_MS = 2_000;
 
 /**
  * Fires locally runnable workflow triggers: friendly schedules and project file
@@ -48,6 +62,8 @@ export class WorkflowSchedulerService {
   private readonly lastRefSha = new Map<string, string>();
   /** Workflow id -> last accepted ref-change run time, for the self-commit cooldown. */
   private readonly lastRefRunFor = new Map<string, number>();
+  /** Workflow id -> last accepted webhook run time, for delivery retries. */
+  private readonly lastWebhookFor = new Map<string, number>();
 
   constructor(
     private readonly workflows: WorkflowService,
@@ -68,6 +84,7 @@ export class WorkflowSchedulerService {
       void this.runDueWorkflows();
       void this.runRefChangeWorkflows();
       this.refreshFileWatchers();
+      void options.onSync?.();
     }, intervalMs);
   }
 
@@ -236,6 +253,58 @@ export class WorkflowSchedulerService {
     return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
   }
 
+  /**
+   * Runs every active webhook workflow whose `detail` matches the delivered hook.
+   *
+   * Matching is on the trailing path segment (`/hooks/<name>`). An empty `detail`
+   * matches nothing rather than everything: a workflow that fires on any inbound
+   * delivery is almost never what someone meant, and defaulting to "all" would make
+   * one hook name accidentally trigger unrelated automation.
+   */
+  async runWebhookWorkflows(hook: string, payload: unknown, now = new Date()): Promise<string[]> {
+    const fired: string[] = [];
+    const normalized = hook.trim().toLowerCase();
+    if (!normalized) return fired;
+
+    for (const workflow of this.workflows.list()) {
+      const { status, trigger, steps } = workflow;
+      if (status !== "active" || trigger.type !== "webhook") continue;
+      if (!steps.some((step) => step.enabled)) continue;
+
+      const configured = trigger.detail?.trim().toLowerCase();
+      if (!configured || configured !== normalized) continue;
+
+      // Same debounce rule as file-change: a provider that retries a delivery, or a
+      // double-click on "redeliver", should not stack runs of the same workflow.
+      const last = this.lastWebhookFor.get(workflow.id) ?? 0;
+      if (now.getTime() - last < WEBHOOK_DEBOUNCE_MS) continue;
+      this.lastWebhookFor.set(workflow.id, now.getTime());
+      this.emit(workflow, `🔔 Webhook /hooks/${hook} received${describePayload(payload)}`);
+
+      try {
+        await this.workflows.run({ workflowId: workflow.id, triggeredBy: "webhook" });
+        fired.push(workflow.id);
+      } catch (error) {
+        this.emitFailure(workflow, error, "Webhook run");
+      }
+    }
+
+    return fired;
+  }
+
+  /** True when at least one active workflow is waiting on an inbound delivery. */
+  hasActiveWebhookWorkflows(): boolean {
+    return this.workflows
+      .list()
+      .some(
+        (workflow) =>
+          workflow.status === "active" &&
+          workflow.trigger.type === "webhook" &&
+          Boolean(workflow.trigger.detail?.trim()) &&
+          workflow.steps.some((step) => step.enabled),
+      );
+  }
+
   /** The scheduled moment this workflow owes a run for, or null when it is current. */
   private dueMoment(workflow: WorkflowDefinition, now: Date): Date | null {
     if (workflow.status !== "active") return null;
@@ -389,6 +458,23 @@ export function parseRefTrigger(detail?: string | null): RefTrigger {
   }
 
   return { branch: text };
+}
+
+/**
+ * A short, safe description of a delivery for the run log.
+ *
+ * Only the shape is reported, never the contents: a webhook body routinely carries
+ * tokens and customer data, and the run log is rendered in the UI and persisted.
+ */
+function describePayload(payload: unknown): string {
+  if (payload === null || payload === undefined) return " (empty body)";
+  if (typeof payload === "string") return ` (${payload.length} bytes of text)`;
+  if (Array.isArray(payload)) return ` (array of ${payload.length})`;
+  if (typeof payload === "object") {
+    const keys = Object.keys(payload as Record<string, unknown>);
+    return keys.length ? ` (JSON keys: ${keys.slice(0, 5).join(", ")}${keys.length > 5 ? "…" : ""})` : " (empty JSON)";
+  }
+  return "";
 }
 
 function normalizeFilter(filter: string): string {

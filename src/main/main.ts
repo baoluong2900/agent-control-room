@@ -9,6 +9,7 @@ import { ProviderSecretVault } from "./settings/provider-secret-vault";
 import { SettingsService } from "./settings/settings-service";
 import { KnowledgeService } from "./knowledge/knowledge-service";
 import { TaskAutomationService } from "./tasks/task-automation-service";
+import { WebhookCoordinator } from "./workflows/webhook-coordinator";
 import { WorkflowSchedulerService } from "./workflows/workflow-scheduler";
 import { WorkflowService } from "./workflows/workflow-service";
 import { createMainWindow } from "./windows/main-window";
@@ -18,6 +19,7 @@ let database: DesktopDatabase | null = null;
 let processManager: AgentProcessManager | null = null;
 let taskAutomationService: TaskAutomationService | null = null;
 let workflowSchedulerService: WorkflowSchedulerService | null = null;
+let webhookCoordinator: WebhookCoordinator | null = null;
 
 /**
  * The schedulers keep ticking after the last window closes (macOS keeps the app
@@ -65,6 +67,12 @@ app.whenReady().then(async () => {
     providerSecretVault,
   );
   workflowSchedulerService = new WorkflowSchedulerService(workflowService, activeWebContents);
+  webhookCoordinator = new WebhookCoordinator(
+    database,
+    providerSecretVault,
+    workflowSchedulerService,
+    activeWebContents,
+  );
 
   registerIpcHandlers({
     agentProcessManager,
@@ -73,13 +81,17 @@ app.whenReady().then(async () => {
     projectService,
     settingsService,
     taskAutomationService,
+    webhookCoordinator,
     workflowSchedulerService,
     workflowService,
   });
 
   mainWindow = trackWindow(createMainWindow());
   taskAutomationService.start();
-  workflowSchedulerService.start();
+  workflowSchedulerService.start({ onSync: () => webhookCoordinator?.sync() });
+  // Opens a port only if a webhook workflow is already active; otherwise this is a
+  // no-op and nothing listens.
+  void webhookCoordinator.sync();
 
   // Dev-only visual QA hook: AGENTIC_SNAPSHOT=<path> writes one PNG of the
   // rendered window, then quits. Never runs in packaged builds.
@@ -130,6 +142,9 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   taskAutomationService?.stop();
   workflowSchedulerService?.stop();
+  // Stop accepting deliveries before the database closes: an in-flight webhook run
+  // writes to it, which is the same write-after-close trap the process manager hit.
+  void webhookCoordinator?.stop();
   processManager?.stopAll();
   database?.close();
 });

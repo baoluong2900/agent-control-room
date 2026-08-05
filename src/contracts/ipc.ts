@@ -42,6 +42,7 @@ import type {
 } from "./task";
 import type {
   WorkflowActivityEntry,
+  WebhookEndpointStatus,
   WorkflowDefinition,
   WorkflowEvent,
   WorkflowExportResult,
@@ -114,6 +115,10 @@ export interface AgenticDesktopApi {
     run: (options: WorkflowRunOptions) => Promise<WorkflowRunRecord>;
     /** Fires every `schedule`-triggered workflow that is due; returns their ids. */
     runDueSchedules: () => Promise<string[]>;
+    /** Current state of the local inbound webhook listener. */
+    webhookStatus: () => Promise<WebhookEndpointStatus>;
+    /** Issues a new token, invalidating the previous one. */
+    rotateWebhookToken: () => Promise<WebhookEndpointStatus>;
     cancel: (workflowRunId: string) => Promise<void>;
     approve: (workflowRunId: string) => Promise<WorkflowRunRecord>;
     reject: (workflowRunId: string, reason?: string) => Promise<WorkflowRunRecord>;

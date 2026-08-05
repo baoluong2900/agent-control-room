@@ -475,6 +475,28 @@ export class DesktopDatabase {
     }
   }
 
+  /**
+   * Reads a single app-level setting.
+   *
+   * The `settings` table existed but had no accessors; this is the first consumer
+   * (the webhook token reference). Values are opaque strings — anything secret goes
+   * in the vault and only its *reference* is stored here.
+   */
+  getSetting(key: string): string | undefined {
+    const row = this.db.prepare(`select value from settings where key = ?`).get(key) as { value?: string } | undefined;
+    return row?.value;
+  }
+
+  setSetting(key: string, value: string): void {
+    this.db
+      .prepare(
+        `insert into settings (key, value, updated_at)
+         values (?, ?, ?)
+         on conflict(key) do update set value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(key, value, new Date().toISOString());
+  }
+
   saveKnowledgeSnapshot(snapshot: KnowledgeSnapshot): void {
     this.db
       .prepare(

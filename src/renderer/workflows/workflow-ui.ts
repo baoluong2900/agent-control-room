@@ -59,11 +59,11 @@ export const locallyRunnableTriggerTypes: WorkflowTriggerType[] = [
   "schedule",
   "file-change",
   "git-push",
+  "webhook",
 ];
 
 export const unsupportedTriggerCopy: Partial<Record<WorkflowTriggerType, string>> = {
   "issue-created": "Issue-created needs a tracker integration before it can run locally.",
-  webhook: "Webhook needs an inbound HTTP listener before it can run locally.",
 };
 
 /** Explains what `trigger.detail` does, per trigger type, in the editor. */
@@ -71,6 +71,8 @@ export const triggerDetailHelp: Partial<Record<WorkflowTriggerType, string>> = {
   "file-change": "Comma-separated paths or globs, e.g. src/**, package.json. Empty watches the whole project.",
   "git-push":
     "Empty polls HEAD. A branch name (main) watches that branch; origin/main watches the remote-tracking ref, which is the closest local signal for “was pushed”.",
+  webhook:
+    "The hook name to listen on, e.g. deploy → POST /hooks/deploy. The listener binds 127.0.0.1 only and requires the token shown below; reach it from outside with a tunnel such as `ssh -R` or cloudflared.",
 };
 
 export function isLocallyRunnableTrigger(type: WorkflowTriggerType): boolean {

@@ -904,6 +904,70 @@
 
 .wf-field textarea { line-height: 1.5; resize: vertical; }
 .wf-field-hint { color: #7e7594; font-size: 10px; line-height: 1.45; }
+
+/*
+ * Webhook endpoint panel. Sits inside the trigger fieldset, so it borrows the
+ * hint colour and stays visually subordinate to the fields above it.
+ */
+.wf-webhook-panel {
+  background: rgba(15, 12, 26, .55);
+  border: 1px solid rgba(167, 139, 250, .22);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 10px 12px;
+}
+
+.wf-webhook-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.wf-webhook-label {
+  color: #a78bfa;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  width: 44px;
+}
+
+.wf-webhook-row code {
+  background: rgba(255, 255, 255, .05);
+  border-radius: 5px;
+  color: #d9d2ee;
+  font-size: 11px;
+  overflow: hidden;
+  padding: 4px 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The token is long; let it shrink rather than push the buttons off the row. */
+.wf-webhook-token { flex: 1; min-width: 0; }
+
+.wf-webhook-row button {
+  align-items: center;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 6px;
+  color: #d9d2ee;
+  cursor: pointer;
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: 10px;
+  gap: 4px;
+  padding: 4px 8px;
+}
+
+.wf-webhook-row button:hover:not(:disabled) { background: rgba(255, 255, 255, .12); }
+.wf-webhook-row button:disabled { cursor: not-allowed; opacity: .45; }
+
+.wf-webhook-error { color: #fb7185; }
+
 .wf-field input:focus,
 .wf-field select:focus,
 .wf-field textarea:focus { border-color: #60a5fa; outline: none; }

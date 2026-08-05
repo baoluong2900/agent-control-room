@@ -28,6 +28,7 @@ import {
   triggerDetailHelp,
   unsupportedTriggerCopy,
 } from "./workflow-ui";
+import { WebhookEndpointPanel } from "./WebhookEndpointPanel";
 import { useAgentsStore } from "../stores/agents-store";
 
 type DraftStep = Omit<WorkflowStepDefinition, "id" | "order"> & { id?: string; key: string };
@@ -343,7 +344,9 @@ export function WorkflowEditorDrawer({
                       ? "src/**, package.json"
                       : draft.triggerType === "git-push"
                         ? "main, or origin/main"
-                        : "GitHub • main, Jira • BUG board…"
+                        : draft.triggerType === "webhook"
+                          ? "deploy"
+                          : "GitHub • main, Jira • BUG board…"
                   }
                   onChange={(event) => patch({ triggerDetail: event.target.value })}
                 />
@@ -352,6 +355,9 @@ export function WorkflowEditorDrawer({
                 <p className="wf-field-hint wf-col-2">{triggerDetailHelp[draft.triggerType]}</p>
               ) : unsupportedTriggerCopy[draft.triggerType] ? (
                 <p className="wf-field-hint wf-col-2">{unsupportedTriggerCopy[draft.triggerType]}</p>
+              ) : null}
+              {draft.triggerType === "webhook" ? (
+                <WebhookEndpointPanel hookName={draft.triggerDetail.trim()} />
               ) : null}
             </div>
           </section>

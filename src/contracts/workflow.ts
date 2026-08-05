@@ -74,6 +74,24 @@ export interface WorkflowTrigger {
   detail?: string;
 }
 
+/**
+ * State of the local inbound webhook listener.
+ *
+ * The listener binds loopback only and requires `token` on every request, so this
+ * is safe to show in the UI — but the token is a credential and should be treated
+ * like one when copied.
+ */
+export interface WebhookEndpointStatus {
+  running: boolean;
+  port: number | null;
+  /** POST target, minus the `/<hook-name>` segment. Null when not listening. */
+  baseUrl: string | null;
+  /** Present so the user can configure a sender; rotatable. */
+  token: string | null;
+  /** Why it is not running when a webhook workflow expects it to be. */
+  error: string | null;
+}
+
 export interface WorkflowStats {
   runs: number;
   /** 0-100 */
