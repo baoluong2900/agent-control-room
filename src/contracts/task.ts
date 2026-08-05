@@ -70,6 +70,12 @@ export interface TaskPlanInput {
    * existing callers and tests are unaffected.
    */
   availableCliIds?: AgentCliId[];
+  /**
+   * `heuristic` (default) is the instant, deterministic, offline template plan.
+   * `ai` spends an agent call to plan against the indexed project, and falls back
+   * to the template whenever that fails for any reason.
+   */
+  mode?: "heuristic" | "ai";
 }
 
 export interface TaskPlanSummary {
@@ -80,8 +86,15 @@ export interface TaskPlanSummary {
   /**
    * How the plan was produced. `template` is the deterministic length/keyword
    * heuristic — named so the UI can stop implying the plan analysed the codebase.
+   * `ai` means an agent CLI produced the steps and they passed validation.
    */
-  source?: "template";
+  source?: "template" | "ai";
+  /**
+   * Why an `ai` request ended up returning a template plan. Always set when the
+   * caller asked for AI and did not get it, so the failure is visible instead of
+   * looking like the model simply wrote a generic plan.
+   */
+  fallbackReason?: string;
   /**
    * Set when no agent CLI is installed. The plan still exists (every step falls
    * back to `shell`) but the UI has to say so rather than presenting steps that

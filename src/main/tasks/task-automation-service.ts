@@ -1,7 +1,18 @@
 import type { WebContents } from "electron";
-import type { AgentCliId, TaskEvent, TaskPlanInput, TaskPlanResult, TaskRecord, TaskScheduleTickResult } from "@contracts";
+import type {
+  AgentCliId,
+  KnowledgeSnapshot,
+  TaskEvent,
+  TaskPlanInput,
+  TaskPlanResult,
+  TaskRecord,
+  TaskScheduleTickResult,
+} from "@contracts";
 import { quoteCommand } from "../agents/commands";
 import { pingAllAgentClis } from "../agents/probe";
+import { resolveProviderEnv } from "../agents/provider-resolver";
+import type { ProviderSecretVault } from "../settings/provider-secret-vault";
+import { requestAiPlan } from "./ai-planner";
 import type { DesktopDatabase } from "../database/desktop-database";
 import type { AgentProcessManager } from "../processes/agent-process-manager";
 import {
@@ -9,6 +20,7 @@ import {
   buildShellScheduledTaskOutput,
   buildTaskPlan,
   defaultModelForCli,
+  type AiPlanOverride,
 } from "./task-planner";
 import { isStalled, planRetry, STALL_SILENCE_MS } from "./retry-policy";
 
@@ -35,6 +47,13 @@ export class TaskAutomationService {
     private readonly db: DesktopDatabase,
     private readonly agentProcessManager: AgentProcessManager,
     private readonly webContentsProvider: () => WebContents | null,
+    /**
+     * Appended as optional so the existing callers (tests, five harnesses) keep
+     * working unchanged. Without them, AI planning degrades to the template plan
+     * with a stated reason rather than failing.
+     */
+    private readonly knowledgeSnapshotProvider?: (projectPath: string) => KnowledgeSnapshot | null,
+    private readonly secretVault?: ProviderSecretVault,
   ) {}
 
   start(options: TaskAutomationOptions = {}): void {
@@ -76,7 +95,18 @@ export class TaskAutomationService {
     // Probe unless the caller already knows: the renderer may pass a list it just
     // fetched for its own UI, and there is no reason to spawn 13 processes again.
     const availableCliIds = input.availableCliIds ?? (await this.availableCliIds());
-    const draft = buildTaskPlan({ ...input, availableCliIds });
+    const resolved: TaskPlanInput = { ...input, availableCliIds };
+
+    let aiPlan: AiPlanOverride | undefined;
+    let fallbackReason: string | undefined;
+
+    if (input.mode === "ai") {
+      const attempt = await this.tryAiPlan(resolved, availableCliIds);
+      aiPlan = attempt.plan;
+      fallbackReason = attempt.reason;
+    }
+
+    const draft = buildTaskPlan(resolved, aiPlan);
     const parent = this.db.saveTask(draft.parent);
     const subtasks = draft.subtasks.map((subtask) =>
       this.db.saveTask({
@@ -89,8 +119,56 @@ export class TaskAutomationService {
     return {
       parent,
       subtasks,
-      summary: draft.summary,
+      summary: {
+        ...draft.summary,
+        // Only meaningful when AI was asked for and not delivered. Always stated, so
+        // a fallback never masquerades as the model writing a generic plan.
+        ...(fallbackReason ? { fallbackReason } : {}),
+      },
     };
+  }
+
+  /**
+   * Attempts an AI plan, returning the reason instead of throwing on failure.
+   *
+   * Every path through here is recoverable by design: the caller always gets a plan,
+   * and asking for AI can only ever cost time, never correctness.
+   */
+  private async tryAiPlan(
+    input: TaskPlanInput,
+    availableCliIds: AgentCliId[] | undefined,
+  ): Promise<{ plan?: AiPlanOverride; reason?: string }> {
+    const cwd = input.projectPath?.trim();
+    if (!cwd) return { reason: "AI planning needs a project folder; used the template plan." };
+
+    // `shell` and `custom` are excluded by type, not just by filter: buildInvocation
+    // cannot construct a shell invocation, and a shell "planner" has no model to ask.
+    const agents = (availableCliIds ?? []).filter(
+      (cliId): cliId is Exclude<AgentCliId, "shell" | "custom"> => cliId !== "shell" && cliId !== "custom",
+    );
+    const cliId = input.preferredCliId && agents.includes(input.preferredCliId as (typeof agents)[number])
+      ? (input.preferredCliId as (typeof agents)[number])
+      : agents[0];
+    if (!cliId) return { reason: "No agent CLI is installed; used the template plan." };
+
+    try {
+      // The snapshot is read, never built: planning must not silently trigger a
+      // full project scan. An unscanned project simply plans without context.
+      const snapshot = this.knowledgeSnapshotProvider?.(cwd) ?? null;
+      const outcome = await requestAiPlan({
+        request: input.request,
+        cwd,
+        cliId,
+        model: input.model ?? undefined,
+        availableCliIds: availableCliIds ?? [],
+        snapshot,
+        env: resolveProviderEnv(this.db, this.secretVault, { cliId }),
+      });
+      return { plan: { steps: outcome.steps, difficulty: outcome.difficulty } };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { reason: `AI planning failed (${message.slice(0, 160)}); used the template plan.` };
+    }
   }
 
   async runDueTasks(): Promise<TaskScheduleTickResult> {

@@ -64,6 +64,17 @@ const defaultModelByCli: Record<AgentCliId, string> = {
  * first installed candidate wins, and `shell` is the universal last resort because
  * it is always available.
  */
+/**
+ * Steps supplied by the AI planner instead of the template.
+ *
+ * Kept structural rather than importing from `ai-planner` so the template path has
+ * no dependency on the LLM path — the default plan must stay buildable in isolation.
+ */
+export type AiPlanOverride = {
+  steps: Array<{ title: string; directive: string; cliId?: AgentCliId }>;
+  difficulty?: TaskDifficulty;
+};
+
 const rolePreferences: Record<string, AgentCliId[]> = {
   Investigate: ["kiro", "claude", "codex", "gemini", "cursor", "copilot"],
   Analyze: ["gemini", "claude", "codex", "kiro", "cursor"],
@@ -109,12 +120,14 @@ function resolveCliForRole(
   return "shell";
 }
 
-export function buildTaskPlan(input: TaskPlanInput): TaskPlanDraft {
+export function buildTaskPlan(input: TaskPlanInput, aiPlan?: AiPlanOverride): TaskPlanDraft {
   const request = input.request.trim();
   if (!request) throw new Error("Task request is required.");
 
   const title = input.title?.trim() || titleFromRequest(request);
-  const difficulty = estimateDifficulty(request);
+  // A model that has read the project is a better difficulty judge than a word
+  // count, but the heuristic still supplies the estimate scale.
+  const difficulty = aiPlan?.difficulty ?? estimateDifficulty(request);
   const estimatedMinutes = estimateMinutes(request, difficulty);
 
   const available = input.availableCliIds ? new Set(input.availableCliIds) : undefined;
@@ -124,7 +137,18 @@ export function buildTaskPlan(input: TaskPlanInput): TaskPlanDraft {
     input.preferredCliId && (!available || available.has(input.preferredCliId)) ? input.preferredCliId : undefined;
   const reassignedSteps: string[] = [];
 
-  const steps = plannerStepsFor(difficulty, preferred).map((step) => ({
+  // AI steps go through exactly the same availability resolution as template ones:
+  // a model suggesting an uninstalled CLI must not reintroduce dead steps.
+  const plannedSteps: PlannerStep[] = aiPlan
+    ? aiPlan.steps.map((step): PlannerStep => ({
+        title: step.title,
+        directive: step.directive,
+        assignedCliId: step.cliId ?? preferred ?? "codex",
+        weight: 1,
+      }))
+    : plannerStepsFor(difficulty, preferred);
+
+  const steps = plannedSteps.map((step) => ({
     ...step,
     assignedCliId: resolveCliForRole(step.title, step.assignedCliId, available, reassignedSteps),
   }));
@@ -188,7 +212,7 @@ export function buildTaskPlan(input: TaskPlanInput): TaskPlanDraft {
       estimatedMinutes,
       agentCount,
       subtaskCount: subtasks.length,
-      source: "template",
+      source: aiPlan ? "ai" : "template",
       ...(noAgentsAvailable ? { noAgentsAvailable: true } : {}),
       ...(reassignedSteps.length > 0 ? { reassignedSteps } : {}),
     },

@@ -278,6 +278,9 @@ export function TasksModule({
   const [planCliId, setPlanCliId] = useState<AgentCliId>("codex");
   const [planModel, setPlanModel] = useState(defaultModelForCli("codex"));
   const [planningTask, setPlanningTask] = useState(false);
+  // Heuristic stays the default: it is instant, offline, and costs no quota. AI is
+  // an intentional upgrade per request, not a new baseline.
+  const [planUseAi, setPlanUseAi] = useState(false);
   const [runningDue, setRunningDue] = useState(false);
 
   const loadTasks = useCallback(async () => {
@@ -488,15 +491,20 @@ export function TasksModule({
         preferredCliId: planCliId,
         model: planModel.trim() || undefined,
         automationEnabled: true,
+        mode: planUseAi ? "ai" : "heuristic",
       });
       await loadTasks();
       setSelectedId(result.parent.id);
       // Say what the plan actually is. The steps come from a fixed template chosen
       // by request length and keyword hits — no codebase analysis happens — and
       // reading it as "AI planning" makes a deterministic tool look like a bad model.
+      const label = result.summary.source === "ai" ? "AI plan" : "Template plan";
       const parts = [
-        `Template plan: ${result.subtasks.length} subtasks for ${difficultyMeta[result.summary.difficulty].label} work.`,
+        `${label}: ${result.subtasks.length} subtasks for ${difficultyMeta[result.summary.difficulty].label} work.`,
       ];
+      // Stated plainly: asking for AI and silently getting the template would make
+      // the fallback look like the model wrote a generic plan.
+      if (result.summary.fallbackReason) parts.push(result.summary.fallbackReason);
       if (result.summary.noAgentsAvailable) {
         parts.push("No agent CLI was found, so every step is assigned to the local shell.");
       } else if (result.summary.reassignedSteps?.length) {
@@ -640,10 +648,12 @@ export function TasksModule({
         onChangeModel={setPlanModel}
         onChangeRequest={setPlanRequest}
         onChangeTitle={setPlanTitle}
+        onChangeUseAi={setPlanUseAi}
         onCreatePlan={() => void createScheduledPlan()}
         onRunDue={() => void runDueTasks()}
         planCliId={planCliId}
         planning={planningTask}
+        useAi={planUseAi}
         project={project}
         request={planRequest}
         runningDue={runningDue}
@@ -981,6 +991,8 @@ function TaskStat({
 
 function TaskSchedulerPanel({
   canPlan,
+  useAi,
+  onChangeUseAi,
   diagnostics,
   dueAt,
   installedCliIds,
@@ -1000,6 +1012,8 @@ function TaskSchedulerPanel({
   title,
 }: {
   canPlan: boolean;
+  useAi: boolean;
+  onChangeUseAi: (value: boolean) => void;
   diagnostics: SystemDiagnostics | null;
   dueAt: string;
   installedCliIds: Set<AgentCliId>;
@@ -1040,8 +1054,9 @@ function TaskSchedulerPanel({
           planning it looks like a weak model.
         */}
         <p className="task-scheduler-hint">
-          Splits the request into a template plan sized by length and keywords, and assigns each step to an installed
-          CLI. It does not analyse your codebase.
+          {useAi
+            ? "Asks an installed agent CLI to plan against the indexed project. Falls back to the template plan, with the reason shown, if that call fails or returns anything unusable."
+            : "Splits the request into a template plan sized by length and keywords, and assigns each step to an installed CLI. It does not analyse your codebase."}
         </p>
 
         <div className="task-scheduler-grid">
@@ -1079,9 +1094,18 @@ function TaskSchedulerPanel({
         </div>
 
         <div className="task-scheduler-actions">
+          {/*
+            Opt-in per plan rather than a saved setting: an AI plan costs quota and
+            tens of seconds, so the choice belongs next to the button that spends it.
+          */}
+          <label className="task-scheduler-ai-toggle">
+            <input type="checkbox" checked={useAi} onChange={(event) => onChangeUseAi(event.target.checked)} />
+            <span>Plan with AI</span>
+            <em>{useAi ? "uses an agent call and the project index" : "instant template plan"}</em>
+          </label>
           <button className="tasks-primary" disabled={!canPlan} onClick={onCreatePlan}>
             <Sparkles size={15} />
-            {planning ? "Scheduling..." : "Split & Schedule"}
+            {planning ? (useAi ? "Planning with AI..." : "Scheduling...") : "Split & Schedule"}
           </button>
           <button className="tasks-ghost" disabled={runningDue} onClick={onRunDue}>
             <PlayCircle size={15} />

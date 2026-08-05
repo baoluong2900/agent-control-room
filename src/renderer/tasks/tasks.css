@@ -211,6 +211,29 @@
   margin: 0 0 12px;
 }
 
+/* Sits beside the Split & Schedule button, where the cost is actually incurred. */
+.task-scheduler-ai-toggle {
+  align-items: center;
+  color: #cfd3ea;
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  gap: 7px;
+  user-select: none;
+}
+
+.task-scheduler-ai-toggle input {
+  accent-color: #8b5cf6;
+  cursor: pointer;
+  margin: 0;
+}
+
+.task-scheduler-ai-toggle em {
+  color: #7f87ab;
+  font-size: 10px;
+  font-style: normal;
+}
+
 .task-scheduler-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

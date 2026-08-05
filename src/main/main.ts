@@ -56,7 +56,14 @@ app.whenReady().then(async () => {
   const settingsService = new SettingsService(database, providerSecretVault, shell);
   const knowledgeService = new KnowledgeService(database, activeWebContents);
   const workflowService = new WorkflowService(database, activeWebContents, providerSecretVault);
-  taskAutomationService = new TaskAutomationService(database, agentProcessManager, activeWebContents);
+  taskAutomationService = new TaskAutomationService(
+    database,
+    agentProcessManager,
+    activeWebContents,
+    // Read-only: AI planning uses an existing snapshot and never triggers a scan.
+    (projectPath) => knowledgeService.get(projectPath),
+    providerSecretVault,
+  );
   workflowSchedulerService = new WorkflowSchedulerService(workflowService, activeWebContents);
 
   registerIpcHandlers({

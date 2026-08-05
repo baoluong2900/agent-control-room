@@ -15,6 +15,10 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({
+      // Squirrel builds a .nuspec, which rejects the package unless authors is
+      // set. Forge infers it from package.json `author`, so keep both present.
+      authors: "baoluong0209",
+      description: "Local Electron desktop workspace for coordinating AI CLI agents across projects.",
       name: "AgenticWorkspace",
       setupExe: "AgenticWorkspaceSetup.exe",
     }),
@@ -22,13 +26,15 @@ const config: ForgeConfig = {
     new MakerDeb({
       options: {
         productName: "Agentic Workspace",
-        maintainer: "Agentic Workspace",
-        homepage: "https://local.agentic-workspace",
+        maintainer: "baoluong0209",
+        homepage: "https://github.com/baoluong2900/agent-control-room",
       },
     }),
     new MakerRpm({
       options: {
         productName: "Agentic Workspace",
+        homepage: "https://github.com/baoluong2900/agent-control-room",
+        license: "MIT",
       },
     }),
   ],
