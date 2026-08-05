@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { WebContents } from "electron";
@@ -15,7 +16,7 @@ import type {
   KnowledgeSnapshot,
   KnowledgeTruncationReport,
 } from "@contracts";
-import type { DesktopDatabase } from "../database/desktop-database";
+import type { DesktopDatabase, KnowledgeFileRecord } from "../database/desktop-database";
 import { type AliasResolver, loadAliasResolver } from "./tsconfig-aliases";
 
 type ScanCandidate = {
@@ -234,6 +235,12 @@ export class KnowledgeService {
 
     const total = collected.files.length;
     let processed = 0;
+    let reused = 0;
+
+    // The per-file index from the last scan. Empty on a first scan, and empty when
+    // the caller forces a full rescan.
+    const cached = input.force ? new Map<string, KnowledgeFileRecord>() : this.database.listKnowledgeFiles(projectPath);
+    const records: KnowledgeFileRecord[] = [];
 
     // Batched rather than sequential: the old loop awaited one readFile at a time,
     // so scan cost was a straight line in file count. Cancellation is checked per
@@ -242,14 +249,29 @@ export class KnowledgeService {
       throwIfCancelled();
       const batch = collected.files.slice(offset, offset + READ_CONCURRENCY);
       const contents = await Promise.all(
-        batch.map(async (candidate) => ({
-          candidate,
-          content: await fs.readFile(candidate.absolutePath, "utf8").catch(() => null),
-        })),
+        batch.map(async (candidate) => {
+          const previous = cached.get(candidate.relativePath);
+          // Cheap rejection first: identical size and mtime means the bytes are
+          // almost certainly identical, so skip the read entirely. This is the
+          // whole point of the phase — a rescan should not re-read the tree.
+          if (previous && previous.bytes === candidate.sizeBytes && previous.mtime === candidate.updatedAt) {
+            return { candidate, content: null, cachedRecord: previous };
+          }
+          const content = await fs.readFile(candidate.absolutePath, "utf8").catch(() => null);
+          return { candidate, content, cachedRecord: undefined };
+        }),
       );
 
-      for (const { candidate, content } of contents) {
+      for (const { candidate, content, cachedRecord } of contents) {
         processed += 1;
+
+        if (cachedRecord) {
+          reused += 1;
+          files.push(cachedRecord.insight);
+          records.push(cachedRecord);
+          continue;
+        }
+
         if (content === null) {
           truncation.skippedUnreadable += 1;
           trackLargestSkipped(truncation.largestSkipped, candidate.relativePath, candidate.sizeBytes);
@@ -261,7 +283,27 @@ export class KnowledgeService {
           continue;
         }
 
-        files.push(analyzeFile(candidate, content));
+        const hash = hashContent(content);
+        const previous = cached.get(candidate.relativePath);
+        // mtime moved but the bytes did not (a touch, a checkout that rewrote the
+        // file identically, a formatter that changed nothing). Reuse the analysis
+        // and just refresh the stat fields.
+        if (previous?.hash === hash) {
+          reused += 1;
+          files.push(previous.insight);
+          records.push({ ...previous, mtime: candidate.updatedAt, bytes: candidate.sizeBytes });
+          continue;
+        }
+
+        const insight = analyzeFile(candidate, content);
+        files.push(insight);
+        records.push({
+          path: candidate.relativePath,
+          hash,
+          mtime: candidate.updatedAt,
+          bytes: candidate.sizeBytes,
+          insight,
+        });
       }
 
       if (processed % PROGRESS_INTERVAL < READ_CONCURRENCY || processed === total) {
@@ -275,6 +317,10 @@ export class KnowledgeService {
     // Read once per scan, not per import: the tsconfig chain is filesystem work
     // and every file in the project resolves against the same alias table.
     const aliases = await loadAliasResolver(projectPath);
+    // The graph is always rebuilt in full, even when one file changed: edges are
+    // relationships between files, so a single new import can add or remove edges
+    // anywhere. Rebuilding from cached insights is still far cheaper than
+    // re-reading and re-parsing the tree.
     const graph = buildCodeGraph(files, aliases);
     truncation.graphNodesDropped = graph.nodesDropped;
     truncation.graphEdgesDropped = graph.edgesDropped;
@@ -301,7 +347,12 @@ export class KnowledgeService {
     snapshot.agentBrief = buildAgentBrief(snapshot);
 
     this.database.saveKnowledgeSnapshot(snapshot);
-    emit({ phase: "done", processed, total });
+    // Written after the snapshot: if this throws, the snapshot the user sees is
+    // still correct and the next scan simply re-reads more than it needed to.
+    // The reverse order could serve cached insights for a snapshot that was never
+    // stored.
+    this.database.replaceKnowledgeFiles(projectPath, records);
+    emit({ phase: "done", processed, total, reused });
     return snapshot;
   }
 
@@ -969,6 +1020,17 @@ function fileNodeId(relativePath: string): string {
 
 function symbolNodeId(relativePath: string, symbol: string): string {
   return `symbol:${relativePath}:${symbol}`;
+}
+
+/**
+ * Content hash for the incremental index.
+ *
+ * sha1 rather than sha256: this is change detection against a local file the
+ * scanner just read, not a security boundary, and it is the cheaper of the two
+ * over a whole tree.
+ */
+function hashContent(content: string): string {
+  return createHash("sha1").update(content).digest("hex");
 }
 
 function externalNodeId(imported: string): string {

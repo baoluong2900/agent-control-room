@@ -33,6 +33,19 @@ import { ensureColumns } from "./sqlite-types";
 import type { SqliteDatabase } from "./sqlite-types";
 import { WorkflowRepository } from "./workflow-repository";
 
+/**
+ * One row of the per-file knowledge index, with its cached analysis already
+ * parsed. `hash` is content-addressed so an mtime bump with identical bytes does
+ * not force a re-parse.
+ */
+export type KnowledgeFileRecord = {
+  path: string;
+  hash: string;
+  mtime: string;
+  bytes: number;
+  insight: KnowledgeFileInsight;
+};
+
 type ProfileRow = {
   id: string;
   name: string;
@@ -407,6 +420,59 @@ export class DesktopDatabase {
    */
   removeProject(projectPath: string): void {
     this.db.prepare("delete from projects where path = ?").run(projectPath);
+  }
+
+  /**
+   * The per-file index for a project, keyed by project-relative path.
+   *
+   * Feeds the incremental scanner: it compares these hashes/mtimes against the
+   * filesystem to decide which files need re-reading and re-parsing.
+   */
+  listKnowledgeFiles(projectPath: string): Map<string, KnowledgeFileRecord> {
+    const rows = this.db
+      .prepare(
+        `select path, hash, mtime, bytes, insight_json as insightJson
+         from knowledge_files
+         where project_path = ?`,
+      )
+      .all(projectPath) as Array<{ path: string; hash: string; mtime: string; bytes: number; insightJson: string }>;
+
+    const result = new Map<string, KnowledgeFileRecord>();
+    for (const row of rows) {
+      const insight = parseJsonValue<KnowledgeFileInsight | null>(row.insightJson, null);
+      // A row whose cached insight cannot be parsed is worse than no row: it would
+      // be served as a cache hit. Dropping it forces a clean re-analysis.
+      if (!insight) continue;
+      result.set(row.path, { path: row.path, hash: row.hash, mtime: row.mtime, bytes: row.bytes, insight });
+    }
+    return result;
+  }
+
+  /**
+   * Replaces the per-file index for a project in one transaction.
+   *
+   * Deleting first is what removes files that no longer exist on disk; doing both
+   * halves in a single transaction means a crash mid-write cannot leave a project
+   * with a half-updated index that a later scan would trust.
+   */
+  replaceKnowledgeFiles(projectPath: string, records: KnowledgeFileRecord[]): void {
+    const deleteAll = this.db.prepare("delete from knowledge_files where project_path = ?");
+    const insert = this.db.prepare(
+      `insert into knowledge_files (project_path, path, hash, mtime, bytes, insight_json)
+       values (?, ?, ?, ?, ?, ?)`,
+    );
+
+    this.db.exec("begin");
+    try {
+      deleteAll.run(projectPath);
+      for (const record of records) {
+        insert.run(projectPath, record.path, record.hash, record.mtime, record.bytes, JSON.stringify(record.insight));
+      }
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   saveKnowledgeSnapshot(snapshot: KnowledgeSnapshot): void {
@@ -1374,6 +1440,21 @@ export class DesktopDatabase {
       create index if not exists idx_agent_runs_task on agent_runs (task_id, started_at desc);
       create index if not exists idx_provider_connections_user on provider_connections (user_id, status);
       create index if not exists idx_knowledge_snapshots_generated on knowledge_snapshots (generated_at desc);
+
+      /*
+       * Per-file index behind the incremental scanner. The snapshot blob above is
+       * still the read model; this table exists so a rescan can tell which files
+       * actually changed instead of re-reading and re-parsing every one.
+       */
+      create table if not exists knowledge_files (
+        project_path text not null,
+        path text not null,
+        hash text not null,
+        mtime text not null,
+        bytes integer not null,
+        insight_json text not null,
+        primary key (project_path, path)
+      );
     `);
     this.workflows.migrate();
 

@@ -14,6 +14,12 @@ export interface KnowledgeScanInput {
    * resolve — which, for a large repo, is the whole point.
    */
   scanId?: string;
+  /**
+   * Ignores the cached per-file index and re-reads everything. For when the
+   * analyzer itself changed, where cached insights are stale even though the files
+   * are not.
+   */
+  force?: boolean;
 }
 
 /** Where a scan is in its walk, pushed to the renderer as it advances. */
@@ -24,6 +30,12 @@ export interface KnowledgeScanProgress {
   processed: number;
   total: number;
   currentPath?: string;
+  /**
+   * Files served from the cached per-file index rather than re-read and re-parsed.
+   * Reported on the `done` event so the UI can say how much of the rescan was
+   * actually skipped.
+   */
+  reused?: number;
 }
 
 export interface KnowledgeLanguageStat {

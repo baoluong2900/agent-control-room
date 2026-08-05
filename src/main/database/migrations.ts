@@ -135,6 +135,27 @@ export const appMigrations: Migration[] = [
       ]);
     },
   },
+  {
+    version: 8,
+    name: "knowledge-per-file-index",
+    up: (db) => {
+      // Backs the incremental scanner. `create table if not exists` rather than a
+      // bare create because `DesktopDatabase.migrate()` also declares this table
+      // in its baseline block, so a fresh database arrives here already holding
+      // it while an upgrading one does not.
+      db.exec(`
+        create table if not exists knowledge_files (
+          project_path text not null,
+          path text not null,
+          hash text not null,
+          mtime text not null,
+          bytes integer not null,
+          insight_json text not null,
+          primary key (project_path, path)
+        );
+      `);
+    },
+  },
 ];
 
 /**

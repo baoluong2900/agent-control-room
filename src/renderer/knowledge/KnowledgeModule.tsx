@@ -56,6 +56,9 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
   // need the current id without re-rendering, and a scan started before a
   // re-render must still be cancellable.
   const activeScanId = useRef<string | null>(null);
+  // `reused` only appears on the terminal `done` event, which arrives before the
+  // scan invoke resolves, so it is stashed here for the completion notice.
+  const lastReused = useRef(0);
 
   useEffect(() => {
     let mounted = true;
@@ -120,6 +123,7 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
       // Ignore progress from a scan this component did not start (a stale scan
       // whose id was already retired, or another window's).
       if (event.scanId !== activeScanId.current) return;
+      if (event.phase === "done") lastReused.current = event.reused ?? 0;
       setProgress(event.phase === "done" || event.phase === "cancelled" ? null : event);
     });
   }, []);
@@ -143,6 +147,7 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
 
     const scanId = `scan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     activeScanId.current = scanId;
+    lastReused.current = 0;
     setScanning(true);
     setProgress(null);
     setError(null);
@@ -156,10 +161,14 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
       });
       setSnapshot(next);
       setSelectedPath(next.files[0]?.path ?? null);
+      // `reused` arrives on the final progress event, not in the snapshot, so read
+      // it from there to tell the user how much of the rescan was actually skipped.
+      const reused = lastReused.current;
+      const reuseNote = reused > 0 ? ` Reused ${reused} unchanged files.` : "";
       setNotice(
         next.truncation
-          ? `CodeGraph indexed ${next.indexedFiles} files; skipped ${next.skippedFiles}.`
-          : `CodeGraph indexed ${next.indexedFiles} files.`,
+          ? `CodeGraph indexed ${next.indexedFiles} files; skipped ${next.skippedFiles}.${reuseNote}`
+          : `CodeGraph indexed ${next.indexedFiles} files.${reuseNote}`,
       );
     } catch (nextError) {
       setError(formatError(nextError));
