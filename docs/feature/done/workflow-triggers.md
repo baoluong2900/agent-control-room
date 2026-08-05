@@ -1,10 +1,10 @@
 # 01 — Workflow triggers: chỉ `schedule` chạy được, 4 loại còn lại là nhãn trống
 
-**Trạng thái: Done (residual: webhook/issue-created) · Mức cũ: P0 · Effort: M**
+**Trạng thái: Done — không còn residual · Mức cũ: P0 · Effort: M**
 
-Cập nhật 2026-08-06: phase 3 (`git-push`) đã implement bằng local ref polling.
-Còn lại `webhook` và `issue-created` — cả hai cần thứ app không có (inbound HTTP,
-credential provider), nên vẫn gated đúng như phase 4 đề xuất.
+Cập nhật 2026-08-06 (pass 2): **cả 6 trigger giờ đều có runner thật**, không còn
+cái nào bị gate. `webhook` chạy bằng loopback HTTP listener; `issue-created` chạy
+bằng cách poll qua chính `gh` CLI của user. Chi tiết ở cuối file.
 
 Implemented 2026-08-04: unsupported remote triggers are gated in the editor/UI, saved unsupported triggers carry warnings instead of silently promising automation, and the local `file-change` runner is implemented with debounce/ignore-loop protection. Residual future work: true remote `git-push`, `issue-created`, and `webhook` runners still need separate architecture decisions.
 
@@ -145,5 +145,59 @@ Test watcher cần thư mục tạm thật và có yếu tố thời gian. Cho p
       `git rev-parse`, seed baseline lúc start, cooldown 90s chống self-retrigger.
       Verify trên repo git thật: seed không fire, commit thật fire 1 lần, commit trong
       cooldown bị bỏ qua, hết cooldown fire lại, non-repo im lặng.
-- [ ] `webhook` / `issue-created` vẫn là future work (cần server + credential).
+- [x] `webhook` đã có runner: loopback listener, token bắt buộc, chỉ mở port khi có
+      webhook workflow đang active.
+- [x] `issue-created` đã có runner: poll qua `gh` CLI của user, không cần credential
+      mới và không mở port.
 - [x] Trigger tests đã được đăng ký trong `test:workflows`, và `npm run typecheck` xanh.
+
+## Hoàn tất phase 4 (2026-08-06, pass 2)
+
+### `webhook` — loopback listener
+
+Đây là **thứ đầu tiên trong app mở port**, nên mặc định chọn phương án dè dặt nhất:
+
+| Quyết định | Lý do |
+| --- | --- |
+| Bind `127.0.0.1`, không phải `0.0.0.0` | Không có gì trong LAN chạm tới được, và không bật firewall prompt. Verify thật trên máy: 127.0.0.1 trả 202, còn 192.168.1.31 / 192.168.1.32 đều bị refuse |
+| Bắt buộc token mọi request | Process nào trên máy cũng chạm được loopback port, nên "local" tự nó **không** phải ranh giới tin cậy. So sánh bằng `timingSafeEqual` + check độ dài trước (vì `timingSafeEqual` throw khi lệch độ dài, và cái throw đó tự nó là length oracle) |
+| Chỉ mở port khi có webhook workflow active | User không dùng webhook thì không bao giờ có socket mở |
+| Remote thì tự tunnel (`ssh -R`, `cloudflared`) | Là lựa chọn có ý thức của user, không phải thứ app âm thầm làm |
+
+Các failure mode đã xử lý: port bị chiếm (báo lý do ra UI log, không crash, và không
+giữ listener hỏng để `sync` còn retry được); auth **trước** khi đọc body (kẻ chưa
+xác thực không được phép bắt app buffer 1MB mỗi request); cap body kiểm **hai lần**
+(theo `content-length` khai báo, rồi theo stream thật, vì sender có thể khai thấp);
+lỗi không echo ra ngoài (caller mới chỉ chứng minh nó giữ token, không được nhận lại
+đường dẫn local); listener stop **trước** `database.close()` trên quit path — đúng
+cái bẫy write-after-close mà process manager từng dính.
+
+Log chỉ ghi **hình dạng** payload (`JSON keys: action, ref`), không ghi nội dung —
+body webhook thường chứa token và dữ liệu khách hàng, mà log đó được render lên UI
+và lưu xuống DB.
+
+Cố ý **không** làm: verify chữ ký theo provider (`X-Hub-Signature-256` của GitHub,
+`Stripe-Signature`). Chúng cần shared secret riêng cho từng workflow và cách
+canonicalise riêng theo provider; làm sai một chi tiết là được một cái check *trông
+có vẻ* an toàn nhưng không an toàn. Token dùng chung thì trung thực về điều nó làm.
+
+### `issue-created` — poll qua `gh` CLI
+
+Lý do trước đây để gate ("cần tracker integration") giả định app phải tự lấy và lưu
+credential GitHub. **Không cần.** `gh` đã cài sẵn và đã đăng nhập với hầu hết người
+muốn dùng trigger này, nên gọi nó là tái dùng auth sẵn có — app không bao giờ thấy,
+lưu, hay refresh token nào. Không port, không credential mới, không cần quyết định
+sản phẩm.
+
+Đánh đổi nói thẳng: chỉ chạy khi có `gh` và đã login, và chỉ cho GitHub. Jira vẫn
+cần integration thật. Nhưng một trigger chạy được cho trường hợp phổ biến vẫn hơn
+một trigger bị disable vĩnh viễn.
+
+Phân biệt quan trọng nhất: **"không xác định được" khác "không có issue nào"**.
+`listOpenIssues` trả `null` (không phải `[]`) khi thiếu `gh`, chưa login, folder
+không phải GitHub repo, hoặc `gh` in ra thứ không phải JSON. Nếu coi đó là repo rỗng
+thì baseline sẽ rỗng, rồi **fire cho toàn bộ issue đang mở** ngay khi `gh` hoạt động
+trở lại. Có test cho đúng chuỗi sự kiện đó.
+
+Verify với `gh` thật: resolve đúng repo `baoluong2900/agent-control-room`, trả `[]`
+cho repo đó, và trả `null` cho `/tmp` thay vì nói "không có issue".

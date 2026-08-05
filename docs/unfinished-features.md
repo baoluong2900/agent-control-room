@@ -15,7 +15,7 @@ Cập nhật bổ sung cùng ngày: các kế hoạch triển khai chi tiết đ
 
 | Mức | Khu vực | Vấn đề chính | Hướng xử lý ngắn |
 | --- | --- | --- | --- |
-| Residual | Workflows | `file-change` and `git-push` (local ref polling) both run; only `issue-created` and `webhook` remain, and both need inbound HTTP or provider credentials the app does not have. Wants architecture. | Keep remote triggers disabled/warned until adding ref polling/API polling/local webhook service. |
+| Done | Workflows | All six triggers now run locally: schedule, file-change, ref polling, a loopback webhook listener, and issue polling via the user's `gh`. Nothing is gated. | Wants architecture. | Keep remote triggers disabled/warned until adding ref polling/API polling/local webhook service. |
 | Residual | Provider connections | Fixed properly 2026-08-06: two renderer call sites still hardcoded `connected` despite this being marked done. Both now verify instead. Real OAuth stays a separate plan. | Keep copy honest or implement callback/device-code auth as a separate feature. |
 | Done | Knowledge | Incremental scan, AST parsing, tsconfig alias resolution, progress/cancel, and ranked search all landed 2026-08-06. | Nothing open; see `docs/feature/done/knowledge-index.md`. |
 | P1 residual | Git | Patch viewer, log, stage/unstage, and commit now exist; branch/push/pull/stash/blame/conflict tooling remains future work. | Keep expanding operations by reversibility: stash/log details next, push only with explicit outbound confirmation. |
@@ -37,7 +37,7 @@ Test: `tests/workflow-agent-binding.test.ts`. Migration cho DB cũ: version 4 v�
 
 ## 1. Workflows: unsupported remote triggers are gated; local triggers run
 
-### W1 — Đã sửa phần lớn (2026-08-06): `git-push` giờ có runner thật
+### W1 — Đã sửa hoàn toàn (2026-08-06): cả 6 trigger đều có runner
 
 `WorkflowSchedulerService` poll local ref bằng `git rev-parse` (tái dùng `git()` từ
 `git-service`). Phát hiện là **ref đã đổi** — commit/merge/rebase/pull — nên label
@@ -49,8 +49,18 @@ workflow tự commit rồi tự trigger; SHA ghi trước khi run nên run fail 
 cùng commit. Test `tests/workflow-ref-trigger.test.ts` (11 case), cộng verify trên
 repo git thật.
 
-Còn lại: `webhook` cần process listen port (xem R1), `issue-created` cần credential
-provider dùng được. Cả hai vẫn gated đúng.
+**Pass bổ sung cùng ngày** đã đóng nốt hai cái còn lại:
+
+- `webhook`: loopback HTTP listener (`127.0.0.1`), bắt buộc token so sánh
+  timing-safe, chỉ mở port khi có webhook workflow active và đóng lại khi không còn.
+  Verify thật: LAN IP của máy (192.168.1.31/.32) đều bị refuse, chỉ loopback trả 202,
+  và không có firewall prompt.
+- `issue-created`: poll qua chính `gh` CLI của user, nên **không cần credential mới
+  và không mở port**. `listOpenIssues` trả `null` chứ không phải `[]` khi không xác
+  định được (thiếu gh / chưa login / không phải GitHub repo), vì coi nhầm thành "repo
+  rỗng" sẽ khiến nó fire cho mọi issue đang mở ngay khi gh hoạt động trở lại.
+
+`unsupportedTriggerCopy` giờ rỗng, và có test assert rằng không trigger nào bị gate.
 
 Evidence (lịch sử):
 

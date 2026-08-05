@@ -162,11 +162,25 @@ Test: `tests/diagnostics-gateway.test.ts` (6 case), gồm một case pin rằng 
 
 ## Vì sao phase 1, 3, 4, 5 vẫn chưa làm
 
-Không phải nợ kỹ thuật bị bỏ quên — chúng cần quyết định sản phẩm:
+Không phải nợ kỹ thuật bị bỏ quên — chúng cần quyết định sản phẩm.
 
-- **Phase 1/3 (sidecar + `/v1`)**: sẽ là process **đầu tiên trong app mở port**.
-  Kéo theo firewall prompt, chọn port, local API key, CORS, và quyết định bundle
-  binary hay yêu cầu user tự cài.
+**Cập nhật 2026-08-06 (pass 2): lý do "chưa ai mở port bao giờ" không còn đúng.**
+Webhook listener (`src/main/workflows/webhook-listener.ts`) đã mở port thật, và nó
+thiết lập sẵn khuôn mẫu mà phase 1/3 có thể dùng lại nguyên vẹn:
+
+- bind `127.0.0.1` nên không có firewall prompt, không lộ ra LAN;
+- token bắt buộc, so sánh timing-safe, lưu trong vault sẵn có;
+- port `0` để OS tự chọn, `EADDRINUSE` báo lý do ra UI thay vì crash;
+- chỉ mở khi thực sự có thứ cần tới nó, đóng lại khi không còn;
+- đóng trước `database.close()` trên quit path.
+
+Nói cách khác, **rào cản hạ tầng đã hết**; phần còn lại của phase 1/3 giờ thuần là
+câu hỏi sản phẩm: có bundle binary của router hay bắt user tự cài, dùng port cố định
+hay ngẫu nhiên, và ai chịu trách nhiệm vòng đời process đó khi app đóng. Đó là những
+câu chỉ chủ sản phẩm trả lời được, không phải thứ agent nên tự quyết.
+
+- **Phase 1/3 (sidecar + `/v1`)**: hạ tầng port đã có tiền lệ (xem trên). Còn lại là
+  quyết định bundle/cài đặt, chọn port, và vòng đời process.
 - **Phase 4 (multi-account OAuth)**: cần đúng những thứ `provider-connection-truth.md`
   đã cố ý loại khỏi scope.
 - **Phase 5 (routing/fallback)**: là một sản phẩm riêng — cần UX rõ trước, và có câu

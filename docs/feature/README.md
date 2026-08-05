@@ -22,9 +22,14 @@ planner, 3 phase) hoàn thành.
 
 Pass **2026-08-06 (cuối)**: plan 01 (ref-change runner) và plan 02 (bỏ optimistic
 `connected` + rename `openProviderSite`) hoàn thành và chuyển sang `done/`; plan 15
-phase 2 (gateway health trong Diagnostics) cũng landed. Backlog mở còn lại **chỉ là
-những mục cần quyết định sản phẩm hoặc hạ tầng app chưa có**: `webhook`/`issue-created`
-runner, OAuth thật, và phase 1/3/4/5 của 15. `npm test` 277/277, `npm run build` pass.
+phase 2 (gateway health trong Diagnostics) cũng landed.
+
+Pass **2026-08-06 (bổ sung)**: hai residual cuối của plan 01 đã xong —
+`webhook` (loopback listener, token bắt buộc, chỉ mở port khi cần) và
+`issue-created` (poll qua `gh` CLI của user, không cần credential mới). **Cả 6
+trigger giờ đều có runner; `unsupportedTriggerCopy` rỗng** và có test chặn việc thêm
+trigger không runner. Backlog mở còn lại đúng những thứ cần bạn quyết định:
+phase 1/3/4/5 của plan 15 và OAuth thật. `npm test` 313/313, `npm run build` pass.
 
 ## Cách đọc một file plan
 
@@ -54,7 +59,7 @@ Các plan hoàn thành được chuyển sang [`done/`](done/README.md), để t
 
 | # | Plan | Trạng thái |
 | --- | --- | --- |
-| 01 | [Workflow triggers](done/workflow-triggers.md) | Done (webhook/issue residual) |
+| 01 | [Workflow triggers](done/workflow-triggers.md) | Done (cả 6 trigger đều chạy) |
 | 02 | [Provider connection truth](done/provider-connection-truth.md) | Done (OAuth = plan riêng) |
 | 03 | [Workflow step profile binding](done/workflow-step-profile-binding.md) | Done |
 | 04 | [Git workspace MVP](done/git-workspace.md) | Done/MVP |
