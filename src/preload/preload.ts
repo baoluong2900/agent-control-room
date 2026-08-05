@@ -9,6 +9,7 @@ import type {
   KnowledgeExportFormat,
   KnowledgeScanInput,
   KnowledgeScanProgress,
+  KnowledgeSearchInput,
   ProviderConnectionAuthRequest,
   ProviderConnectionInput,
   TaskEvent,
@@ -97,6 +98,7 @@ const api: AgenticDesktopApi = {
     get: (projectPath: string) => ipcRenderer.invoke("knowledge:get", projectPath),
     scan: (input: KnowledgeScanInput) => ipcRenderer.invoke("knowledge:scan", input),
     cancelScan: (scanId: string) => ipcRenderer.invoke("knowledge:cancel", scanId),
+    search: (input: KnowledgeSearchInput) => ipcRenderer.invoke("knowledge:search", input),
     export: (projectPath: string, format: KnowledgeExportFormat) =>
       ipcRenderer.invoke("knowledge:export", projectPath, format),
   },

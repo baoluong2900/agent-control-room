@@ -47,6 +47,10 @@ export type {
   KnowledgeLanguageStat,
   KnowledgeScanInput,
   KnowledgeScanProgress,
+  KnowledgeSearchHit,
+  KnowledgeSearchInput,
+  KnowledgeSearchMatchKind,
+  KnowledgeSearchResult,
   KnowledgeSnapshot,
   KnowledgeTruncationReport,
 } from "./knowledge";

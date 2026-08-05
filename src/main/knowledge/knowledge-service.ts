@@ -13,11 +13,14 @@ import type {
   KnowledgeLanguageStat,
   KnowledgeScanInput,
   KnowledgeScanProgress,
+  KnowledgeSearchInput,
+  KnowledgeSearchResult,
   KnowledgeSnapshot,
   KnowledgeTruncationReport,
 } from "@contracts";
 import type { DesktopDatabase, KnowledgeFileRecord } from "../database/desktop-database";
 import { parseModule } from "./ast-parser";
+import { searchSnapshot } from "./knowledge-search";
 import { type AliasResolver, loadAliasResolver } from "./tsconfig-aliases";
 
 type ScanCandidate = {
@@ -355,6 +358,20 @@ export class KnowledgeService {
     this.database.replaceKnowledgeFiles(projectPath, records);
     emit({ phase: "done", processed, total, reused });
     return snapshot;
+  }
+
+  /**
+   * Ranked search over the stored snapshot.
+   *
+   * Runs in the main process rather than the renderer because the renderer only
+   * ever held the snapshot it had already loaded, and because scoring belongs next
+   * to the data. Returns empty results for a project that was never scanned rather
+   * than scanning on demand — a search box must not kick off a minute of work.
+   */
+  search(input: KnowledgeSearchInput): KnowledgeSearchResult {
+    const snapshot = this.get(input.projectPath);
+    if (!snapshot) return { query: input.query, hits: [], scanned: 0 };
+    return searchSnapshot(snapshot, input.query, input.limit);
   }
 
   async export(projectPath: string, format: KnowledgeExportFormat): Promise<KnowledgeExportResult> {

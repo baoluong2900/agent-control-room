@@ -125,3 +125,31 @@ export interface KnowledgeExportResult {
   content: string;
   generatedAt: string;
 }
+
+export interface KnowledgeSearchInput {
+  projectPath: string;
+  query: string;
+  limit?: number;
+}
+
+/** Why a result matched, so the UI can show the reason rather than just a path. */
+export type KnowledgeSearchMatchKind = "path" | "symbol" | "export" | "import" | "purpose" | "language" | "category";
+
+export interface KnowledgeSearchHit {
+  path: string;
+  language: string;
+  category: string;
+  purpose: string;
+  score: number;
+  /** Match reasons, strongest first. */
+  matches: KnowledgeSearchMatchKind[];
+  /** The specific symbol/export/import that matched, when one did. */
+  matchedTerm?: string;
+}
+
+export interface KnowledgeSearchResult {
+  query: string;
+  hits: KnowledgeSearchHit[];
+  /** Total files considered, so the UI can say "12 of 800". */
+  scanned: number;
+}

@@ -17,6 +17,8 @@ import type {
   KnowledgeExportResult,
   KnowledgeScanInput,
   KnowledgeScanProgress,
+  KnowledgeSearchInput,
+  KnowledgeSearchResult,
   KnowledgeSnapshot,
 } from "./knowledge";
 import type {
@@ -126,6 +128,8 @@ export interface AgenticDesktopApi {
     scan: (input: KnowledgeScanInput) => Promise<KnowledgeSnapshot>;
     /** Requests cancellation of an in-flight scan by its `scanId`. */
     cancelScan: (scanId: string) => Promise<boolean>;
+    /** Ranked search over the stored snapshot, scored in the main process. */
+    search: (input: KnowledgeSearchInput) => Promise<KnowledgeSearchResult>;
     export: (projectPath: string, format: KnowledgeExportFormat) => Promise<KnowledgeExportResult>;
   };
   events: {

@@ -19,6 +19,7 @@ import type {
   KnowledgeFileInsight,
   KnowledgeGraphEdge,
   KnowledgeScanProgress,
+  KnowledgeSearchResult,
   KnowledgeSnapshot,
   ProjectSummary,
 } from "@contracts";
@@ -52,6 +53,7 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
   const [scanMaxFiles, setScanMaxFiles] = useState(1_200);
   const [scanMaxFileBytes, setScanMaxFileBytes] = useState(220_000);
   const [progress, setProgress] = useState<KnowledgeScanProgress | null>(null);
+  const [searchHits, setSearchHits] = useState<KnowledgeSearchResult | null>(null);
   // Held in a ref, not state: the cancel button and the progress listener both
   // need the current id without re-rendering, and a scan started before a
   // re-render must still be cancellable.
@@ -88,27 +90,65 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
     };
   }, [project]);
 
+  // Ranked search replaces the old client-side substring filter, which had no
+  // ordering: a file merely mentioning the query in prose ranked identically to
+  // one named after it. Scoring lives in the main process next to the data.
+  useEffect(() => {
+    const normalized = query.trim();
+    if (!project || !normalized) {
+      setSearchHits(null);
+      return;
+    }
+
+    let live = true;
+    const timer = setTimeout(() => {
+      void window.agentic.knowledge
+        .search({ projectPath: project.path, query: normalized, limit: 60 })
+        .then((result) => {
+          // Guard against an earlier query resolving after a later one.
+          if (live) setSearchHits(result);
+        })
+        .catch(() => {
+          if (live) setSearchHits(null);
+        });
+    }, 140);
+
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [project, query, snapshot]);
+
   const filteredFiles = useMemo(() => {
     if (!snapshot) return [];
-    const normalized = query.trim().toLowerCase();
-    return snapshot.files.filter((file) => {
-      const inCategory = category === "all" || file.category === category;
-      if (!inCategory) return false;
-      if (!normalized) return true;
-      return [
-        file.path,
-        file.language,
-        file.category,
-        file.purpose,
-        file.symbols.join(" "),
-        file.imports.join(" "),
-        file.exports.join(" "),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalized);
-    });
-  }, [category, query, snapshot]);
+    const normalized = query.trim();
+
+    // No query: plain category filter, original scan order.
+    if (!normalized) {
+      return category === "all" ? snapshot.files : snapshot.files.filter((file) => file.category === category);
+    }
+
+    // Until the ranked result arrives, keep showing something rather than
+    // flickering to empty on every keystroke.
+    if (!searchHits) {
+      const lowered = normalized.toLowerCase();
+      return snapshot.files.filter(
+        (file) =>
+          (category === "all" || file.category === category) &&
+          (file.path.toLowerCase().includes(lowered) || file.purpose.toLowerCase().includes(lowered)),
+      );
+    }
+
+    const byPath = new Map(snapshot.files.map((file) => [file.path, file]));
+    const ranked: KnowledgeFileInsight[] = [];
+    for (const hit of searchHits.hits) {
+      const file = byPath.get(hit.path);
+      if (!file) continue;
+      if (category !== "all" && file.category !== category) continue;
+      ranked.push(file);
+    }
+    return ranked;
+  }, [category, query, searchHits, snapshot]);
 
   const selectedFile = useMemo(() => {
     if (!snapshot) return null;
