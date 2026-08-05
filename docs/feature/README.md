@@ -12,6 +12,11 @@ tại và vẫn đúng. Chi tiết bằng chứng trong `docs/audit-2026-08-05.m
 runtime đã tìm ra và sửa trong lần rà soát đó (spawn-window trong
 `AgentProcessManager` khiến `stop()` không có tác dụng và concurrency limit bị vượt).
 
+Re-verify **2026-08-06**: plan 07 (agent lifecycle) đã hoàn thành và được chuyển sang
+`done/`. Trong lúc verify, một bug quit path đã được tìm ra và sửa: output đến muộn từ
+child đang bị kill ghi vào database đã close, gây `uncaughtException` lúc thoát app.
+Chi tiết trong `done/agent-lifecycle.md`. `npm test` 193/193.
+
 ## Cách đọc một file plan
 
 Mỗi plan có cùng cấu trúc:
@@ -34,7 +39,6 @@ Thứ tự này tính theo **giá trị / rủi ro**, không phải theo độ k
 | 01 | [workflow-triggers.md](workflow-triggers.md) | **Residual/P0** | M | Local file-change chạy được; remote `git-push`/issue/webhook runners vẫn chưa có |
 | 02 | [provider-connection-truth.md](provider-connection-truth.md) | **Residual/P0** | S | Local verification đã có; OAuth/device token flow thật vẫn chưa có |
 | 05 | [knowledge-index.md](knowledge-index.md) | P1 | L | Full rescan mỗi lần, regex thay vì AST, alias `@contracts` bị coi là external |
-| 07 | [agent-lifecycle.md](agent-lifecycle.md) | **Partial done** | M | Restart and concurrency queue landed; SIGTERM escalation remains future hardening |
 | 11 | [task-ai-planner.md](task-ai-planner.md) | P2 | M | Planner là word-count heuristic, gán CLI hardcode không cần biết CLI có tồn tại |
 | 15 | [ai-gateway-sidecar.md](ai-gateway-sidecar.md) | P3 | XL | `docs/aiagnet.md` mô tả local router, runtime không có server nào listen port |
 
@@ -54,6 +58,7 @@ Các plan hoàn thành được chuyển sang [`done/`](done/README.md), để t
 | 12 | [Structured chat capability](done/structured-chat-capability.md) | Done |
 | 13 | [Workflow schema versioning](done/workflow-schema-versioning.md) | Done |
 | 14 | [Diagnostics tiers](done/diagnostics-tiers.md) | Done/MVP |
+| 07 | [Agent lifecycle](done/agent-lifecycle.md) | Done |
 | — | [Hermes Agent gateway provider](done/hermes-agent-provider.md) | Done |
 
 Effort: S = dưới 1 ngày, M = 1–3 ngày, L = 1 tuần, XL = nhiều tuần / cần quyết định sản phẩm.
@@ -64,7 +69,7 @@ Effort: S = dưới 1 ngày, M = 1–3 ngày, L = 1 tuần, XL = nhiều tuần 
 
 **Sprint 2 — làm cho panel dùng được hằng ngày.** Plan 04 (Git workspace MVP), 06 (truncation report), và 08 (log retention) đã xong. Git còn các operation nâng cao như stash/branch/push/conflict UX, nhưng patch/stage/commit path đã dùng được hằng ngày.
 
-**Sprint 3 — độ tin cậy.** Plan 10 và 13 đã xong: scheduler không còn spam retry mỗi 30 giây và mọi schema change của workflow đi qua `schema_migrations`. Plan 07 đã có restart + concurrency queue, chỉ còn kill escalation.
+**Sprint 3 — độ tin cậy.** Plan 10 và 13 đã xong: scheduler không còn spam retry mỗi 30 giây và mọi schema change của workflow đi qua `schema_migrations`. Plan 07 đã xong hoàn toàn: restart, concurrency queue, và kill escalation (SIGTERM→SIGKILL + tree-kill).
 
 **Sprint 4+ — nâng chất lượng lõi.** Plan 05 (AST index) là mục lớn nhất và nên làm sau khi 06 đã cho thấy scan bỏ sót bao nhiêu. Plan 15 cần quyết định sản phẩm trước khi viết code.
 

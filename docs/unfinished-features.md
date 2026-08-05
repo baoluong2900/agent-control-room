@@ -20,7 +20,7 @@ Cập nhật bổ sung cùng ngày: các kế hoạch triển khai chi tiết đ
 | P1 | Knowledge | CodeGraph is still full rescan + regex heuristic; truncation reporting now exists for caps/skips/drops. | Use current report to guide incremental scanner and parser work. |
 | P1 residual | Git | Patch viewer, log, stage/unstage, and commit now exist; branch/push/pull/stash/blame/conflict tooling remains future work. | Keep expanding operations by reversibility: stash/log details next, push only with explicit outbound confirmation. |
 | P2 | Tasks | “Plan” là heuristic trong code, không dùng AI/LLM dù UI mô tả khá thông minh. | Đổi copy thành heuristic scheduler hoặc thêm planner agent thật. |
-| P2 residual | Agents | Restart + concurrency queue landed; pause/resume and SIGTERM escalation/tree-kill remain hardening gaps. | Add kill escalation tests/implementation; keep pause only for CLIs with explicit support. |
+| P2 residual | Agents | Restart, concurrency queue, and SIGTERM→SIGKILL/tree-kill escalation all landed; only pause/resume remains out of scope. | Keep pause only for CLIs with an explicit application-level checkpoint capability. |
 | P2 | AI gateway docs | `docs/aiagnet.md` mô tả 9Router/CLIProxyAPI sidecar, nhưng runtime/package hiện chưa có router process hoặc `/v1` endpoint. | Gắn nhãn tài liệu này là proposal, hoặc implement gateway sidecar thật. |
 
 ## Đã sửa (2026-08-04): workflow step ↔ agent connection
@@ -212,7 +212,7 @@ Việc nên làm: giữ preset nhưng label rõ “Templates”, hoặc tạo on
 
 ## 6. Agents: runtime chạy thật, nhưng lifecycle/capability chưa đầy đủ
 
-### A1 — Restart/concurrency queue đã có; kill escalation và pause capability còn lại
+### A1 — Restart/concurrency queue/kill escalation đã có; chỉ còn pause capability
 
 Status update 2026-08-04:
 
@@ -236,11 +236,36 @@ spawning.size` gates concurrency, `sessions()` reports them as `planning` /
 Verified: `tests/agent-process-lifecycle.test.ts` went from 6 pass / 1 fail to 7
 pass / 0 fail across three consecutive runs; full `npm test` is 175/175.
 
-Residual: `stop()` still needs hardening for stubborn child processes — SIGKILL /
-tree-kill escalation after a SIGTERM timeout is still absent (grep for `SIGKILL`
-and `tree-kill` in `src/main/processes/agent-process-manager.ts` returns nothing).
-Pause/resume should stay out of scope unless a CLI exposes an application-level
-checkpoint/resume capability.
+Status update 2026-08-06 — kill escalation landed:
+
+`src/main/processes/process-tree.ts` snapshots the pid/ppid table *before*
+signalling (once the root dies its children are re-parented and the link that
+identifies them is gone), sends SIGTERM, and escalates to SIGKILL after an
+injectable grace period — `taskkill /F /T /PID` on win32, which is the only way
+to take a tree there. Descendants are reaped deepest-first, because killing a
+parent before its children is what creates the orphans the function exists to
+prevent. `stop()` no longer deletes its bookkeeping right after signalling: it
+keeps the child handle until exit is confirmed, so "stopped" is a fact about the
+OS rather than a claim. A `terminating` set keeps the run out of the concurrency
+count and the session list while the kill is in flight, so a queued run does not
+wait out the grace period of a child that is already logically stopped.
+
+A second bug surfaced while verifying this. `before-quit`
+(`src/main/main.ts:123-128`) calls `stopAll()` then `database.close()`, both
+synchronous — but the signalled children outlive them by up to the full grace
+period and an agent CLI prints on its way out. That late stdout reached
+`handleOutput()` → `appendTerminalLog()` on a closed handle and threw
+`database is not open` from inside a stream callback: an uncaughtException on the
+way to exit, once per live agent. `handleOutput` was the only async DB writer in
+the manager without a `shuttingDown` guard; every other handler already had one.
+
+Verified: `npm test` 193/193 (was 192 pass / 1 fail). The new regression test in
+`tests/process-kill-escalation.test.ts` was confirmed load-bearing by removing the
+guard and watching it fail with the exact `database is not open` error.
+
+Residual: pause/resume stays out of scope unless a CLI exposes an
+application-level checkpoint/resume capability — SIGSTOP mid-stream leaves a dead
+provider connection behind, which is a worse state than stopping outright.
 
 ### A2 — Structured chat resume chỉ áp dụng Claude/Agy
 

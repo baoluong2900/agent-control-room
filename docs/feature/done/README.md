@@ -8,6 +8,7 @@ nhận. Backlog chưa xong và các plan còn residual nằm ở [`../`](../READ
 | 03 | [Workflow step profile binding](workflow-step-profile-binding.md) | Done |
 | 04 | [Git workspace](git-workspace.md) | Done/MVP |
 | 06 | [Knowledge truncation report](knowledge-truncation-report.md) | Done |
+| 07 | [Agent lifecycle](agent-lifecycle.md) | Done |
 | 08 | [Terminal log retention](terminal-log-retention.md) | Done |
 | 09 | [Workflow metrics delta](workflow-metrics-delta.md) | Done |
 | 10 | [Task retry policy](task-retry-policy.md) | Done |

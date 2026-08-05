@@ -1,14 +1,16 @@
 # 07 — Agent lifecycle: restart, concurrency limit, kill escalation
 
-**Trạng thái: Partial done · Mức cũ: P1 · Effort: M**
+**Trạng thái: Done · Mức cũ: P1 · Effort: M**
 
-Implemented 2026-08-04: restart and a real concurrency queue are wired through the process manager/API/UI, so `queued` now represents actual waiting work and failed runs can be restarted with their saved input. Remaining hardening: stop escalation still needs a confirmed SIGTERM→SIGKILL/tree-kill path for stubborn child processes.
+Implemented 2026-08-04: restart and a real concurrency queue are wired through the process manager/API/UI, so `queued` now represents actual waiting work and failed runs can be restarted with their saved input.
+
+Completed 2026-08-06: kill escalation landed. `src/main/processes/process-tree.ts` snapshots the process tree, escalates SIGTERM→SIGKILL after an injectable grace period (`taskkill /F /T` on win32), and reaps descendants deepest-first; `stop()` no longer drops its bookkeeping before the child is confirmed dead. Covered by `tests/process-kill-escalation.test.ts` (registered in `test:workflows`).
 
 ## Trạng thái hiện tại
 
-Partial done. `AgentProcessManager` đã có queue/concurrency limit thật và restart path; IPC/renderer có hành động restart, và task/workflow callers không còn phải spawn vô hạn khi nhiều run đến cùng lúc. Status `queued` giờ là trạng thái runtime thật thay vì chỉ là nhãn trước khi spawn.
+Done. `AgentProcessManager` đã có queue/concurrency limit thật và restart path; IPC/renderer có hành động restart, và task/workflow callers không còn phải spawn vô hạn khi nhiều run đến cùng lúc. Status `queued` giờ là trạng thái runtime thật thay vì chỉ là nhãn trước khi spawn.
 
-Phần còn thiếu của plan này là **kill escalation**. `stop()` cần được verify rằng nó không xoá bookkeeping trước khi child thật sự exit, và rằng process cứng đầu bị hạ bằng SIGKILL/tree-kill sau timeout. Đây là hardening độc lập, không chặn restart/queue đã landed.
+Kill escalation đã xong (2026-08-06): `stop()` giữ handle cho tới khi child thật sự exit, escalate SIGTERM→SIGKILL sau grace period, và kill cả cây process con nên `sh -lc` không còn để lại orphan. Grace period injectable qua constructor để test co xuống vài trăm ms.
 
 ### Cập nhật 2026-08-05 — spawn-window bug đã sửa
 
@@ -32,9 +34,32 @@ không nằm ở collection nào, nên:
 Test `tests/agent-process-lifecycle.test.ts` chuyển từ 6 pass / 1 fail sang 7 pass /
 0 fail (chạy 3 lần liên tiếp); full `npm test` = 175/175.
 
-Việc này **không** thay thế Phase 1 dưới đây: SIGKILL/tree-kill escalation vẫn chưa
-có — grep `SIGKILL` / `tree-kill` trong `src/main/processes/agent-process-manager.ts`
-vẫn trả về 0 kết quả. Phase 1 giờ là mục rẻ nhất và giá trị cao nhất còn lại.
+Việc này **không** thay thế Phase 1 dưới đây. Phase 1 (kill escalation) sau đó đã
+được làm xong trong pass 2026-08-06 — xem ghi chú Completed ở đầu file.
+
+
+### Cập nhật 2026-08-06 — late output ghi vào DB đã close
+
+Khi verify phase 1, suite lộ ra một bug thật của quit path (`npm test` 192 pass /
+1 fail, luôn cùng một file):
+
+`app.on("before-quit")` (`src/main/main.ts:123-128`) gọi `processManager.stopAll()`
+rồi `database.close()` — cả hai đồng bộ. Nhưng child process sống thêm tới hết
+grace period, và agent CLI thường in output lúc bị kill. Output muộn đó đi vào
+`handleOutput()` → `appendTerminalLog()` trên handle đã đóng và throw
+`database is not open` từ trong stream callback, tức **uncaughtException trên
+đường thoát app**, một lần cho mỗi agent còn chạy.
+
+`handleOutput` là DB writer async duy nhất trong manager **không** có guard
+`shuttingDown` — mọi handler khác (`error`, `exit`, `onEscalate`) đều đã có. Fix
+là thêm guard đó; bỏ vài byte cuối của một CLI đang chết trong lúc quit là trade
+đúng, vì run đã được ghi `stopped` và không còn reader nào để hiển thị.
+
+Regression test: `tests/process-kill-escalation.test.ts` — "the quit path survives
+output that arrives after the database closes". Đã verify test này load-bearing
+bằng cách bỏ guard ra và thấy nó đỏ với đúng lỗi `database is not open`.
+
+`npm test`: 193/193.
 
 
 ## Mục tiêu
@@ -96,7 +121,7 @@ Case "queue rồi stop" và "shutdown khi có queue" là hai chỗ dễ sai nh�
 
 ## Acceptance
 
-- [ ] Chạy một CLI bắt SIGTERM và không thoát → app vẫn dừng được nó, không để lại process mồ côi (verify bằng `ps`).
+- [x] Chạy một CLI bắt SIGTERM và không thoát → app vẫn dừng được nó, không để lại process mồ côi (verify bằng `ps`).
 - [x] Start nhiều agent hơn giới hạn → số process thật đúng bằng giới hạn, phần còn lại hiện `queued`.
 - [x] Một agent kết thúc → agent đang chờ tự động bắt đầu.
 - [x] Đóng app khi có agent đang queued → không spawn thêm sau shutdown.
