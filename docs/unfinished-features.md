@@ -17,9 +17,9 @@ Cập nhật bổ sung cùng ngày: các kế hoạch triển khai chi tiết đ
 | --- | --- | --- | --- |
 | P0 residual | Workflows | Unsupported remote triggers are gated/warned; `file-change` has a local runner, but true remote `git-push`, `issue-created`, and `webhook` automation still need architecture. | Keep remote triggers disabled/warned until adding ref polling/API polling/local webhook service. |
 | P0 residual | Provider connections | Local verification is wired and Connect no longer self-claims `connected`; OAuth/device remains open-external/manual, not token exchange. | Keep copy honest or implement callback/device-code auth as a separate feature. |
-| P1 | Knowledge | CodeGraph is still full rescan + regex heuristic; truncation reporting now exists for caps/skips/drops. | Use current report to guide incremental scanner and parser work. |
+| Done | Knowledge | Incremental scan, AST parsing, tsconfig alias resolution, progress/cancel, and ranked search all landed 2026-08-06. | Nothing open; see `docs/feature/done/knowledge-index.md`. |
 | P1 residual | Git | Patch viewer, log, stage/unstage, and commit now exist; branch/push/pull/stash/blame/conflict tooling remains future work. | Keep expanding operations by reversibility: stash/log details next, push only with explicit outbound confirmation. |
-| P2 | Tasks | “Plan” là heuristic trong code, không dùng AI/LLM dù UI mô tả khá thông minh. | Đổi copy thành heuristic scheduler hoặc thêm planner agent thật. |
+| Done | Tasks | Planner now assigns only installed CLIs, labels itself a template plan, and has an opt-in AI mode with stated fallback. | Nothing open; see `docs/feature/done/task-ai-planner.md`. |
 | P2 residual | Agents | Restart, concurrency queue, and SIGTERM→SIGKILL/tree-kill escalation all landed; only pause/resume remains out of scope. | Keep pause only for CLIs with an explicit application-level checkpoint capability. |
 | P2 | AI gateway docs | `docs/aiagnet.md` mô tả 9Router/CLIProxyAPI sidecar, nhưng runtime/package hiện chưa có router process hoặc `/v1` endpoint. | Gắn nhãn tài liệu này là proposal, hoặc implement gateway sidecar thật. |
 
@@ -116,9 +116,19 @@ Khoảng trống còn lại: chưa có OS keychain item riêng, rotation, audit 
 
 ## 3. Knowledge / CodeGraph: scanner còn heuristic, chưa phải index thông minh đầy đủ
 
-### K1 — Scan là full rescan, không incremental
+### K1 — Đã sửa (2026-08-06): scan giờ là incremental
 
-Evidence:
+Bảng `knowledge_files(project_path, path, hash, mtime, bytes, insight_json)` giữ
+per-file index (migration 8 + baseline DDL). Rescan bỏ qua theo hai tầng: size+mtime
+giống thì không đọc file; mtime đổi mà content hash giống thì đọc nhưng không parse
+lại. Index được ghi lại trong một transaction nên file đã xoá cũng bị evict.
+
+Đo trên repo này: cold 140ms → warm **21ms (6.83x)**, `reused=166/166`. `force: true`
+là đường thoát khi analyzer đổi. Graph vẫn rebuild toàn bộ mỗi lần vì edge là quan hệ
+giữa các file. Progress/cancel có qua `knowledge:progress` / `knowledge:cancel`.
+Test: `tests/knowledge-incremental.test.ts`, `tests/knowledge-progress.test.ts`.
+
+Evidence (lịch sử, trạng thái trước khi sửa):
 
 - `KnowledgeService.scan()` luôn gọi `collectFiles(projectPath, maxFiles, maxFileBytes)` rồi đọc/analyze từng file tại `src/main/knowledge/knowledge-service.ts:103` đến `src/main/knowledge/knowledge-service.ts:144`.
 - Snapshot được lưu đè qua `this.database.saveKnowledgeSnapshot(snapshot)` tại `src/main/knowledge/knowledge-service.ts:143`.
@@ -128,9 +138,23 @@ Hệ quả: project lớn sẽ scan lại toàn bộ trong mỗi lần user bấ
 
 Việc nên làm: lưu per-file hash/mtime, chỉ re-read file changed, và expose progress event cho UI.
 
-### K2 — Symbol/import/export extraction dùng regex, chưa dùng AST/LSP
+### K2 — Đã sửa (2026-08-06): TS/JS dùng AST, regex chỉ còn là fallback
 
-Evidence:
+`src/main/knowledge/ast-parser.ts` dùng `ts.createSourceFile` cho
+`.ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs`. Import trong comment/string/template không
+còn tạo edge, `export * from` được bắt (trước đây không regex nào cover), và mọi dạng
+import thật đều nhận ra: default, namespace, named, type-only, side-effect,
+`require()`, dynamic `import()` ở mọi độ sâu, `import x = require()`.
+`import(variable)` bị bỏ qua chứ không đoán.
+
+Đo được: `src/contracts/index.ts` từ 0 lên 9 import. Regex **vẫn giữ** cho Python/Go/
+CSS — TS compiler không parse được chúng và một parser sai còn tệ hơn regex thô; có
+test pin điều đó. Alias `@contracts` cũng đã resolve thành local node thay vì external
+package (`tsconfig-aliases.ts`, chịu được JSONC vì tsconfig của repo có `//` comment).
+Chi phí: cold scan 140→327ms, nhưng incremental giữ warm rescan ở 20ms.
+Test: `tests/knowledge-ast.test.ts`, `tests/knowledge-alias.test.ts`.
+
+Evidence (lịch sử, trạng thái trước khi sửa):
 
 - Import extraction dùng regex trong `extractImports()` tại `src/main/knowledge/knowledge-service.ts:482` đến `src/main/knowledge/knowledge-service.ts:490`.
 - Export extraction dùng regex trong `extractExports()` tại `src/main/knowledge/knowledge-service.ts:493` đến `src/main/knowledge/knowledge-service.ts:504`.
@@ -173,9 +197,25 @@ Status update 2026-08-04: `GitDiffPanel` now has Files/Patch/Stat/Log views. Fil
 
 ## 5. Tasks: planner/scheduler có thật nhưng còn heuristic và tuyến tính
 
-### T1 — Task planner là heuristic hardcoded, chưa phải AI planning
+### T1 — Đã sửa (2026-08-06): CLI thật + copy trung thực + AI mode tuỳ chọn
 
-Evidence:
+Heuristic vẫn là mặc định (tức thì, tất định, offline, không tốn quota), nhưng ba
+vấn đề thật đã được sửa:
+
+1. **Không còn gán CLI chưa cài.** Mỗi role có danh sách ưu tiên, lấy candidate đầu
+   tiên có cài, cuối cùng fallback `shell`. Availability được probe và cache 5 phút.
+2. **Copy nói đúng bản chất.** Summary báo `source: "template"`, và UI nói thẳng nó
+   không phân tích codebase. Reassignment được hiện ra (`Analyze: gemini -> claude`).
+3. **AI mode opt-in** (`mode: "ai"`) hỏi một agent CLI đã cài, dùng knowledge snapshot
+   làm context. Mọi failure — không CLI, timeout, exit != 0, prose thay JSON, JSON sai
+   shape, step trỏ CLI không tồn tại — đều fallback về template plan kèm
+   `fallbackReason` hiện ra cho user.
+
+Live verify: AI plan mất 41.6s, `source=ai`, và đề xuất đúng hướng (cache schema →
+migration → incremental logic → tests). Test: `tests/task-planner-availability.test.ts`,
+`tests/task-ai-planner.test.ts` (chạy offline, không gọi CLI thật).
+
+Evidence (lịch sử, trạng thái trước khi sửa):
 
 - `buildTaskPlan()` gọi `estimateDifficulty()`, `estimateMinutes()`, `plannerStepsFor()` trong code local tại `src/main/tasks/task-planner.ts:58` đến `src/main/tasks/task-planner.ts:120`.
 - Độ khó dựa trên word count, keyword hits và sentence count tại `src/main/tasks/task-planner.ts:159` đến `src/main/tasks/task-planner.ts:170`.
@@ -338,6 +378,12 @@ Evidence:
 Hệ quả: placeholder “Search workspace” có thể bị hiểu là search toàn project/code/tasks, nhưng hiện chỉ là navigation launcher.
 
 Việc nên làm: đổi placeholder thành “Open workspace area”, hoặc tích hợp project/task/knowledge search.
+
+Cập nhật 2026-08-06: D3 **vẫn đúng** — TopBar chưa đổi, nó vẫn chỉ filter
+`workspaceNavigation`. Nhưng building block đã có: `knowledge:search`
+(`src/main/knowledge/knowledge-search.ts`) là ranked search thật trên snapshot, có
+scoring theo filename/symbol/export/import/purpose và báo cả lý do match. Nếu làm D3
+thì nối vào channel đó thay vì viết filter thứ hai.
 
 ## 9. Database/migration: app DB đã có `schema_migrations`, workflow repository còn legacy `ensureColumns`
 

@@ -1,6 +1,11 @@
 # 15 — AI gateway / sidecar: tài liệu mô tả router nhưng runtime chưa có server
 
-**Mức: P3 · Effort: XL · Loại: quyết định sản phẩm trước khi code**
+**Trạng thái: Acceptance ngắn hạn Done · Mức: P3 · Effort: XL · Loại: quyết định sản phẩm trước khi code**
+
+Phase 0 đã xong (2026-08-06 verify): `docs/aiagnet.md` đã có banner
+`Status: proposal / future architecture` ở đầu file, README không claim `/v1`
+gateway, và index đã link plan này với P3/XL. Phase 1+ vẫn cố ý chưa làm — chúng
+cần quyết định sản phẩm trước, không phải nợ kỹ thuật cần trả gấp.
 
 Plan này khác các plan còn lại: không khuyến nghị lao vào implement ngay. Đây là khoảng cách giữa **tài liệu định hướng** và **runtime hiện tại**.
 
@@ -122,9 +127,16 @@ Phần server nên có test riêng, không chạy Electron UI trừ khi cần. N
 
 ## Acceptance ngắn hạn
 
-- [ ] `docs/aiagnet.md` nói rõ đây là future proposal, không phải runtime hiện tại.
-- [ ] README/source docs không claim app đã có `/v1` gateway.
-- [ ] `docs/feature/README.md` link plan này với effort XL và P3.
+- [x] `docs/aiagnet.md` nói rõ đây là future proposal, không phải runtime hiện tại.
+- [x] README/source docs không claim app đã có `/v1` gateway.
+      (grep `\/v1|9Router|gateway|sidecar` trong README: 0 hit.)
+- [x] `docs/feature/README.md` link plan này với effort XL và P3.
+
+Re-verify runtime 2026-08-06: grep `createServer` / `.listen(` / `express` /
+`fastify` trong `src/main` và `src/preload` vẫn không có hit thật — app vẫn là
+local CLI orchestrator, không mở port nào. Hit duy nhất liên quan là một comment
+và địa chỉ bind mặc định của `hermes proxy start` trong `provider-runtime-env.ts`,
+tức là *trỏ tới* một router bên ngoài, không phải tự chạy một cái.
 
 ## Acceptance dài hạn nếu implement
 

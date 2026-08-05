@@ -15,7 +15,13 @@ runtime đã tìm ra và sửa trong lần rà soát đó (spawn-window trong
 Re-verify **2026-08-06**: plan 07 (agent lifecycle) đã hoàn thành và được chuyển sang
 `done/`. Trong lúc verify, một bug quit path đã được tìm ra và sửa: output đến muộn từ
 child đang bị kill ghi vào database đã close, gây `uncaughtException` lúc thoát app.
-Chi tiết trong `done/agent-lifecycle.md`. `npm test` 193/193.
+Chi tiết trong `done/agent-lifecycle.md`.
+
+Pass **2026-08-06 (tiếp)**: plan 05 (knowledge index, 5 phase) và plan 11 (task
+planner, 3 phase) đã hoàn thành và chuyển sang `done/`; acceptance ngắn hạn của plan
+15 đã verify đạt. Backlog mở còn lại chỉ là residual của 01/02 (remote trigger
+runners, OAuth/device thật) và phase 1+ của 15. `npm test` 256/256, `npm run build`
+pass.
 
 ## Cách đọc một file plan
 
@@ -38,9 +44,7 @@ Thứ tự này tính theo **giá trị / rủi ro**, không phải theo độ k
 | --- | --- | --- | --- | --- |
 | 01 | [workflow-triggers.md](workflow-triggers.md) | **Residual/P0** | M | Local file-change chạy được; remote `git-push`/issue/webhook runners vẫn chưa có |
 | 02 | [provider-connection-truth.md](provider-connection-truth.md) | **Residual/P0** | S | Local verification đã có; OAuth/device token flow thật vẫn chưa có |
-| 05 | [knowledge-index.md](knowledge-index.md) | P1 | L | Full rescan mỗi lần, regex thay vì AST, alias `@contracts` bị coi là external |
-| 11 | [task-ai-planner.md](task-ai-planner.md) | P2 | M | Planner là word-count heuristic, gán CLI hardcode không cần biết CLI có tồn tại |
-| 15 | [ai-gateway-sidecar.md](ai-gateway-sidecar.md) | P3 | XL | `docs/aiagnet.md` mô tả local router, runtime không có server nào listen port |
+| 15 | [ai-gateway-sidecar.md](ai-gateway-sidecar.md) | P3 | XL | Acceptance ngắn hạn (dán nhãn proposal) đã xong; sidecar/`/v1` thật cần quyết định sản phẩm trước |
 
 ## Completed archive
 
@@ -56,8 +60,10 @@ Các plan hoàn thành được chuyển sang [`done/`](done/README.md), để t
 | 09 | [Workflow metrics delta](done/workflow-metrics-delta.md) | Done |
 | 10 | [Task retry policy](done/task-retry-policy.md) | Done |
 | 12 | [Structured chat capability](done/structured-chat-capability.md) | Done |
+| 11 | [Task AI planner](done/task-ai-planner.md) | Done |
 | 13 | [Workflow schema versioning](done/workflow-schema-versioning.md) | Done |
 | 14 | [Diagnostics tiers](done/diagnostics-tiers.md) | Done/MVP |
+| 05 | [Knowledge index](done/knowledge-index.md) | Done |
 | 07 | [Agent lifecycle](done/agent-lifecycle.md) | Done |
 | — | [Hermes Agent gateway provider](done/hermes-agent-provider.md) | Done |
 
@@ -71,7 +77,10 @@ Effort: S = dưới 1 ngày, M = 1–3 ngày, L = 1 tuần, XL = nhiều tuần 
 
 **Sprint 3 — độ tin cậy.** Plan 10 và 13 đã xong: scheduler không còn spam retry mỗi 30 giây và mọi schema change của workflow đi qua `schema_migrations`. Plan 07 đã xong hoàn toàn: restart, concurrency queue, và kill escalation (SIGTERM→SIGKILL + tree-kill).
 
-**Sprint 4+ — nâng chất lượng lõi.** Plan 05 (AST index) là mục lớn nhất và nên làm sau khi 06 đã cho thấy scan bỏ sót bao nhiêu. Plan 15 cần quyết định sản phẩm trước khi viết code.
+**Sprint 4+ — nâng chất lượng lõi.** Plan 05 đã xong cả 5 phase (alias, progress/cancel,
+incremental, AST, ranked search) và plan 11 đã xong cả 3 phase (CLI availability, copy
+trung thực, AI mode có fallback). Plan 15 vẫn cần quyết định sản phẩm trước khi viết code;
+acceptance ngắn hạn của nó (dán nhãn tài liệu) đã đạt.
 
 ## Ràng buộc chung cho mọi plan
 

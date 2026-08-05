@@ -1,6 +1,9 @@
 # 11 — Task planner: từ word-count heuristic sang plan có ngữ cảnh
 
-**Mức: P2 · Effort: M**
+**Trạng thái: Done · Mức cũ: P2 · Effort: M**
+
+Implemented 2026-08-06, cả 3 phase. Heuristic vẫn là mặc định; AI là chế độ
+opt-in per request. Chi tiết ở cuối file.
 
 ## Trạng thái hiện tại
 
@@ -91,8 +94,58 @@ Test cho AI mode nên mock agent output thay vì gọi CLI thật — suite ph�
 
 ## Acceptance
 
-- [ ] Máy chỉ cài một CLI → plan sinh ra chỉ dùng CLI đó, không đề cập CLI khác.
-- [ ] Máy không cài CLI nào → plan nói rõ thay vì sinh step chết.
-- [ ] Nhãn UI không gọi plan heuristic là phân tích thông minh.
-- [ ] AI mode sinh được subtask theo ngữ cảnh project, và fallback êm khi output không parse được.
-- [ ] `npm test` xanh và chạy được không cần mạng.
+- [x] Máy chỉ cài một CLI → plan sinh ra chỉ dùng CLI đó, không đề cập CLI khác.
+      (Verify với `availableCliIds: ["codex","shell"]`: cả 5 agent step dồn về codex.)
+- [x] Máy không cài CLI nào → plan nói rõ thay vì sinh step chết.
+      (`noAgentsAvailable: true`, mọi step fallback `shell`.)
+- [x] Nhãn UI không gọi plan heuristic là phân tích thông minh.
+      (`source: "template"`, hint nói thẳng "It does not analyse your codebase".)
+- [x] AI mode sinh được subtask theo ngữ cảnh project, và fallback êm khi output không parse được.
+      (Live verify: 41.6s, `source=ai`, plan đề xuất cache schema + migration + incremental logic.)
+- [x] `npm test` xanh (256/256) và chạy được không cần mạng — test AI mode dùng string
+      cố định chứ không gọi CLI thật.
+
+## Đã implement (2026-08-06)
+
+**Phase 1 — chỉ gán CLI đã cài.** `rolePreferences` cho mỗi role một danh sách ưu
+tiên; lấy candidate đầu tiên có cài, cuối cùng fallback `shell`.
+`TaskAutomationService` probe availability và **cache 5 phút** — ping 13 CLI là 13
+process, làm mỗi lần plan thì chậm cho một kết quả chỉ đổi khi user cài thêm.
+
+Ba phân biệt mà implementation phụ thuộc vào:
+
+- **"Chưa được cho biết" khác "không có gì".** `availableCliIds` không truyền →
+  giữ nguyên hành vi cũ (tests/harness không bị ảnh hưởng). Mảng rỗng → đã probe
+  và thật sự không có. Probe lỗi → trả `undefined`, không phải mảng rỗng, để một
+  probe hỏng không dồn cả plan về `shell`.
+- **`preferredCliId` chưa cài thì bị bỏ**, vì một preference máy không đáp ứng
+  được là một step chết chứ không phải preference.
+- **`shell`/`custom` không tính là agent**, nên `noAgentsAvailable` nói "không có
+  agent CLI" chứ không phải "không có gì".
+
+**Phase 2 — copy trung thực.** Summary báo `source`, `noAgentsAvailable`, và danh
+sách `reassignedSteps` dạng `Analyze: gemini -> claude`. Reassignment được **hiện
+ra** chứ không âm thầm áp dụng.
+
+**Phase 3 — AI mode.** `src/main/tasks/ai-planner.ts`. Phần khó không phải prompt
+mà là *từ chối tin* output. Mọi failure đều kết thúc bằng template plan +
+`fallbackReason`, không bao giờ là plan rỗng:
+
+| Failure | Xử lý |
+| --- | --- |
+| Không có project folder / không có agent CLI | Fallback, nêu lý do. `shell` bị loại **ở tầng type**, không chỉ filter |
+| Timeout 90s, spawn fail, exit != 0 | Fallback. stdout dùng được thì thắng exit code, vì nhiều CLI ghi answer ra stdout và diagnostics ra stderr rồi vẫn exit != 0 |
+| Prose thay vì JSON, fence, JSON kèm text | Brace-matching từ `{` đầu tiên, **bỏ qua brace trong string literal** — cách "tìm `}` cuối" hoặc regex sẽ cắt mất plan khi directive có chứa `}` |
+| Step trỏ CLI chưa cài | Giữ step, bỏ **chỉ** phần gợi ý CLI, để role resolver của phase 1 gán cái có thật |
+| `difficulty` ngoài range | Bỏ qua, dùng lại estimate heuristic |
+| Model lan man | Cap 8 step |
+
+Hai ràng buộc có chủ ý: snapshot chỉ được **đọc**, không build — plan không được
+âm thầm kích hoạt full scan (project chưa index thì plan không có context, và
+prompt nói rõ điều đó để model không tự bịa file path); và timeout **kill child
+trước khi reject**, để một lần plan timeout không để lại CLI chạy trên project
+của user.
+
+Test: `tests/task-planner-availability.test.ts` (10) và
+`tests/task-ai-planner.test.ts` (13). Đã xác nhận load-bearing bằng cách tắt
+availability check và thấy 5/10 test đỏ.
