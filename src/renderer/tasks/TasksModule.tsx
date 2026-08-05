@@ -491,9 +491,19 @@ export function TasksModule({
       });
       await loadTasks();
       setSelectedId(result.parent.id);
-      setNotice(
-        `Scheduled ${result.subtasks.length} subtasks for ${difficultyMeta[result.summary.difficulty].label} work.`,
-      );
+      // Say what the plan actually is. The steps come from a fixed template chosen
+      // by request length and keyword hits — no codebase analysis happens — and
+      // reading it as "AI planning" makes a deterministic tool look like a bad model.
+      const parts = [
+        `Template plan: ${result.subtasks.length} subtasks for ${difficultyMeta[result.summary.difficulty].label} work.`,
+      ];
+      if (result.summary.noAgentsAvailable) {
+        parts.push("No agent CLI was found, so every step is assigned to the local shell.");
+      } else if (result.summary.reassignedSteps?.length) {
+        // A plan that silently changed shape is worse than one that says so.
+        parts.push(`Reassigned to installed CLIs — ${result.summary.reassignedSteps.join(", ")}.`);
+      }
+      setNotice(parts.join(" "));
       setPlanRequest("");
       setPlanTitle("");
     } catch (error) {
@@ -1023,6 +1033,16 @@ function TaskSchedulerPanel({
           </div>
           <em className={ready ? "ready" : "missing"}>{ready ? "Ready" : "Needs CLI"}</em>
         </header>
+        {/*
+          Sets the expectation before the user clicks. The split is a fixed template
+          picked by request length and keyword hits — it does not read the codebase.
+          Read as a template it is a useful, instant, offline tool; read as AI
+          planning it looks like a weak model.
+        */}
+        <p className="task-scheduler-hint">
+          Splits the request into a template plan sized by length and keywords, and assigns each step to an installed
+          CLI. It does not analyse your codebase.
+        </p>
 
         <div className="task-scheduler-grid">
           <label className="task-scheduler-field">

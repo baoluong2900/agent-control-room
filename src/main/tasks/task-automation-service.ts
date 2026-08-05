@@ -1,6 +1,7 @@
 import type { WebContents } from "electron";
-import type { TaskEvent, TaskPlanInput, TaskPlanResult, TaskRecord, TaskScheduleTickResult } from "@contracts";
+import type { AgentCliId, TaskEvent, TaskPlanInput, TaskPlanResult, TaskRecord, TaskScheduleTickResult } from "@contracts";
 import { quoteCommand } from "../agents/commands";
+import { pingAllAgentClis } from "../agents/probe";
 import type { DesktopDatabase } from "../database/desktop-database";
 import type { AgentProcessManager } from "../processes/agent-process-manager";
 import {
@@ -15,9 +16,20 @@ type TaskAutomationOptions = {
   intervalMs?: number;
 };
 
+/**
+ * How long a CLI-availability probe stays good for.
+ *
+ * Probing all 13 CLIs spawns 13 processes, so doing it per plan would make
+ * planning noticeably slow for a result that changes only when the user installs
+ * something. Five minutes is short enough that a fresh install is picked up in the
+ * same session.
+ */
+const CLI_AVAILABILITY_TTL_MS = 5 * 60_000;
+
 export class TaskAutomationService {
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
+  private cliAvailability: { ids: AgentCliId[]; checkedAt: number } | null = null;
 
   constructor(
     private readonly db: DesktopDatabase,
@@ -39,8 +51,32 @@ export class TaskAutomationService {
     this.timer = null;
   }
 
-  planTask(input: TaskPlanInput): TaskPlanResult {
-    const draft = buildTaskPlan(input);
+  /**
+   * Installed agent CLIs, cached for `CLI_AVAILABILITY_TTL_MS`.
+   *
+   * Returns undefined if probing fails outright, which the planner reads as "not
+   * told" and answers by keeping its historical preferences — better than claiming
+   * nothing is installed and collapsing every step onto `shell`.
+   */
+  private async availableCliIds(): Promise<AgentCliId[] | undefined> {
+    const cached = this.cliAvailability;
+    if (cached && Date.now() - cached.checkedAt < CLI_AVAILABILITY_TTL_MS) return cached.ids;
+
+    try {
+      const results = await pingAllAgentClis();
+      const ids = results.filter((result) => result.installed).map((result) => result.cliId);
+      this.cliAvailability = { ids, checkedAt: Date.now() };
+      return ids;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async planTask(input: TaskPlanInput): Promise<TaskPlanResult> {
+    // Probe unless the caller already knows: the renderer may pass a list it just
+    // fetched for its own UI, and there is no reason to spawn 13 processes again.
+    const availableCliIds = input.availableCliIds ?? (await this.availableCliIds());
+    const draft = buildTaskPlan({ ...input, availableCliIds });
     const parent = this.db.saveTask(draft.parent);
     const subtasks = draft.subtasks.map((subtask) =>
       this.db.saveTask({

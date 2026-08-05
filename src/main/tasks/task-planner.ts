@@ -55,6 +55,60 @@ const defaultModelByCli: Record<AgentCliId, string> = {
   custom: "default",
 };
 
+/**
+ * Ranked CLI preferences per planner role.
+ *
+ * The planner used to hardcode one CLI per step regardless of what was installed,
+ * so a plan could contain steps that simply could not run and the user only found
+ * out when they failed. These lists are preference order, not requirements: the
+ * first installed candidate wins, and `shell` is the universal last resort because
+ * it is always available.
+ */
+const rolePreferences: Record<string, AgentCliId[]> = {
+  Investigate: ["kiro", "claude", "codex", "gemini", "cursor", "copilot"],
+  Analyze: ["gemini", "claude", "codex", "kiro", "cursor"],
+  Plan: ["claude", "codex", "gemini", "kiro", "cursor"],
+  Execute: ["codex", "claude", "cursor", "kiro", "gemini", "aider"],
+  Review: ["claude", "codex", "gemini", "kiro", "cursor"],
+  Verify: ["shell"],
+};
+
+/**
+ * Picks a CLI for a role, honouring what is installed.
+ *
+ * `available` of `undefined` means "caller did not tell us", which keeps the old
+ * behaviour: take the intended CLI as-is. An empty set means "we checked and found
+ * nothing", which is different and must fall back to `shell`.
+ */
+function resolveCliForRole(
+  role: string,
+  intended: AgentCliId,
+  available: Set<AgentCliId> | undefined,
+  reassigned: string[],
+): AgentCliId {
+  if (!available) return intended;
+  if (available.has(intended)) return intended;
+
+  const candidates = rolePreferences[role] ?? [];
+  for (const candidate of candidates) {
+    if (available.has(candidate)) {
+      reassigned.push(`${role}: ${intended} -> ${candidate}`);
+      return candidate;
+    }
+  }
+
+  // Nothing suitable for this role: anything else installed beats a dead step.
+  for (const candidate of available) {
+    if (candidate !== "custom") {
+      reassigned.push(`${role}: ${intended} -> ${candidate}`);
+      return candidate;
+    }
+  }
+
+  reassigned.push(`${role}: ${intended} -> shell`);
+  return "shell";
+}
+
 export function buildTaskPlan(input: TaskPlanInput): TaskPlanDraft {
   const request = input.request.trim();
   if (!request) throw new Error("Task request is required.");
@@ -62,18 +116,37 @@ export function buildTaskPlan(input: TaskPlanInput): TaskPlanDraft {
   const title = input.title?.trim() || titleFromRequest(request);
   const difficulty = estimateDifficulty(request);
   const estimatedMinutes = estimateMinutes(request, difficulty);
-  const steps = plannerStepsFor(difficulty, input.preferredCliId ?? undefined);
+
+  const available = input.availableCliIds ? new Set(input.availableCliIds) : undefined;
+  // A preferred CLI the machine does not have is not a preference, it is a broken
+  // step; drop it so role resolution can pick something real.
+  const preferred =
+    input.preferredCliId && (!available || available.has(input.preferredCliId)) ? input.preferredCliId : undefined;
+  const reassignedSteps: string[] = [];
+
+  const steps = plannerStepsFor(difficulty, preferred).map((step) => ({
+    ...step,
+    assignedCliId: resolveCliForRole(step.title, step.assignedCliId, available, reassignedSteps),
+  }));
+
   const automationEnabled = Boolean(input.dueAt) && input.automationEnabled !== false;
   const dueAt = normalizeIso(input.dueAt);
   const agentCount = new Set(steps.map((step) => step.assignedCliId)).size;
+
+  // `shell` is always installed, so "no agents" means no *agent* CLI, not literally
+  // nothing. Reported separately because it changes what the plan can be trusted to do.
+  const noAgentsAvailable = Boolean(
+    available && [...available].every((cliId) => cliId === "shell" || cliId === "custom"),
+  );
+  const parentCli = preferred ?? steps.find((step) => step.title === "Execute")?.assignedCliId ?? "shell";
 
   const parent: TaskSaveInput = {
     projectPath: input.projectPath ?? null,
     title,
     prompt: request,
     status: "open",
-    assignedCliId: input.preferredCliId ?? "codex",
-    assignedModel: input.model?.trim() || defaultModelForCli(input.preferredCliId ?? "codex"),
+    assignedCliId: parentCli,
+    assignedModel: input.model?.trim() || defaultModelForCli(parentCli),
     dueAt,
     difficulty,
     estimatedMinutes,
@@ -82,7 +155,7 @@ export function buildTaskPlan(input: TaskPlanInput): TaskPlanDraft {
 
   const subtasks = steps.map((step, index) => {
     const assignedModel =
-      input.preferredCliId && step.assignedCliId === input.preferredCliId
+      preferred && step.assignedCliId === preferred
         ? input.model?.trim() || defaultModelForCli(step.assignedCliId)
         : defaultModelForCli(step.assignedCliId);
 
@@ -115,6 +188,9 @@ export function buildTaskPlan(input: TaskPlanInput): TaskPlanDraft {
       estimatedMinutes,
       agentCount,
       subtaskCount: subtasks.length,
+      source: "template",
+      ...(noAgentsAvailable ? { noAgentsAvailable: true } : {}),
+      ...(reassignedSteps.length > 0 ? { reassignedSteps } : {}),
     },
   };
 }

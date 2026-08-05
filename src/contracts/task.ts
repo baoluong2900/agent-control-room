@@ -64,6 +64,12 @@ export interface TaskPlanInput {
   preferredCliId?: AgentCliId | null;
   model?: string | null;
   automationEnabled?: boolean;
+  /**
+   * CLIs known to be installed on this machine. When provided, the planner only
+   * assigns steps to these; when omitted it keeps its historical preferences, so
+   * existing callers and tests are unaffected.
+   */
+  availableCliIds?: AgentCliId[];
 }
 
 export interface TaskPlanSummary {
@@ -71,6 +77,23 @@ export interface TaskPlanSummary {
   estimatedMinutes: number;
   agentCount: number;
   subtaskCount: number;
+  /**
+   * How the plan was produced. `template` is the deterministic length/keyword
+   * heuristic — named so the UI can stop implying the plan analysed the codebase.
+   */
+  source?: "template";
+  /**
+   * Set when no agent CLI is installed. The plan still exists (every step falls
+   * back to `shell`) but the UI has to say so rather than presenting steps that
+   * cannot run.
+   */
+  noAgentsAvailable?: boolean;
+  /**
+   * Steps whose intended CLI was missing and were reassigned, as
+   * `Investigate: kiro -> codex`. Surfaced so a plan that quietly changed shape is
+   * explainable.
+   */
+  reassignedSteps?: string[];
 }
 
 export interface TaskPlanResult {
