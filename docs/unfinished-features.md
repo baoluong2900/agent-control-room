@@ -21,7 +21,7 @@ Cập nhật bổ sung cùng ngày: các kế hoạch triển khai chi tiết đ
 | P1 residual | Git | Patch viewer, log, stage/unstage, and commit now exist; branch/push/pull/stash/blame/conflict tooling remains future work. | Keep expanding operations by reversibility: stash/log details next, push only with explicit outbound confirmation. |
 | Done | Tasks | Planner now assigns only installed CLIs, labels itself a template plan, and has an opt-in AI mode with stated fallback. | Nothing open; see `docs/feature/done/task-ai-planner.md`. |
 | P2 residual | Agents | Restart, concurrency queue, and SIGTERM→SIGKILL/tree-kill escalation all landed; only pause/resume remains out of scope. | Keep pause only for CLIs with an explicit application-level checkpoint capability. |
-| Residual | AI gateway | Doc labelled as proposal, and Diagnostics now live-probes a gateway the user runs. App still does not spawn a sidecar or expose `/v1` — that needs a product decision. | Gắn nhãn tài liệu này là proposal, hoặc implement gateway sidecar thật. |
+| Residual | AI gateway | App now spawns and owns a sidecar (lifecycle, ports, logs, `/health`, local key) and Diagnostics reports it. Still no `/v1` routing — that needs a product decision. | Gắn nhãn tài liệu này là proposal, hoặc implement gateway sidecar thật. |
 
 ## Đã sửa (2026-08-04): workflow step ↔ agent connection
 
@@ -366,11 +366,18 @@ Status update 2026-08-04: terminal log storage now has per-message truncation wi
 
 ## 7. AI gateway / router: tài liệu kiến trúc đã mô tả nhiều hơn runtime hiện tại
 
-### R1 — Vẫn đúng, nhưng Diagnostics giờ báo được gateway health
+### R1 — Đã làm phần hạ tầng (2026-08-06); còn lại là quyết định sản phẩm
 
-App vẫn **không** spawn sidecar và không expose `/v1` — grep `createServer` /
-`.listen(` trong `src/main` vẫn không có hit thật. Điều đó cần quyết định sản phẩm
-(firewall prompt, chọn port, local API key, CORS, bundle binary hay không).
+**Cập nhật pass 3:** app **giờ đã** spawn và quản lý sidecar
+(`src/main/gateway/sidecar-manager.ts`): lifecycle không để process mồ côi (dùng lại
+`terminateProcessTree`), port conflict báo rõ chứ không âm thầm đổi port, log cap 500
+dòng, local API key strip khỏi log. Verify với router thật `hermes proxy start`:
+`/health` trả HTTP 200, stop 72ms, port được giải phóng, không process sót.
+
+Vẫn **chưa** expose `/v1` routing của riêng app — và đó mới là phần cần quyết định
+sản phẩm (adapt provider nào trước, cancellation map vào workflow step thế nào).
+App không bundle binary: command là config trong bảng `settings`, chưa cấu hình thì
+là no-op im lặng.
 
 Đã làm được phần không cần quyết định: `collectGatewayChecks` live-probe `baseUrl`
 của connection `hermes-agent` và là check **live duy nhất** trong Diagnostics — các

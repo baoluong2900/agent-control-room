@@ -53,7 +53,7 @@ Sửa bằng cách khai báo map xuôi tường minh (provider → danh sách CL
 
 Ngắn hạn, trung thực: đổi wording UI từ OAuth/device login thành đúng những gì xảy ra — mở trang provider trong browser để người dùng tự lấy credential rồi dán vào. Sửa label quanh `SettingsModule.tsx:164-168` và `:201-205`, và cân nhắc đổi tên `openProviderAuth` thành `openProviderSite` để tên hàm không hứa hẹn quá.
 
-Nếu muốn OAuth thật thì đó là một plan riêng, vì nó cần: custom protocol handler (`app.setAsDefaultProtocolClient`) hoặc loopback listener cho redirect, PKCE + `state`, token exchange, refresh trước khi hết hạn, và thêm field token vào `ProviderConnectionAuthResult`. Chú ý một loopback listener sẽ là **process đầu tiên trong app mở port** — hiện `src/main` không có gì listen (xem `ai-gateway-sidecar.md`), nên nó kéo theo cân nhắc về bảo mật và firewall prompt. Đừng nhét vào plan này.
+Nếu muốn OAuth thật thì đó là một plan riêng, vì nó cần: custom protocol handler (`app.setAsDefaultProtocolClient`) hoặc loopback listener cho redirect, PKCE + `state`, token exchange, refresh trước khi hết hạn, và thêm field token vào `ProviderConnectionAuthResult`. Chú ý phần loopback listener: **cập nhật 2026-08-06 — app giờ đã mở port** (webhook listener + gateway sidecar), nên hạ tầng và khuôn mẫu bảo mật đã có sẵn để dùng lại (bind `127.0.0.1`, token timing-safe, port 0, đóng trước `database.close()`). Việc còn lại của OAuth là PKCE/token exchange/refresh, không phải câu hỏi "có nên mở port". Vẫn đừng nhét vào plan này.
 
 ## Test
 
@@ -100,4 +100,4 @@ tồn tại.
 **OAuth thật vẫn ngoài scope, có chủ ý.** Nó cần protocol handler hoặc loopback
 listener, PKCE + `state`, token exchange, refresh trước khi hết hạn, và đổi contract
 để chở token. Plan này đã nói rõ đừng nhét vào đây; thêm nữa, loopback listener sẽ
-là thứ **đầu tiên trong app mở port**.
+trước đây sẽ là thứ đầu tiên trong app mở port — **không còn đúng từ 2026-08-06**, vì webhook listener và gateway sidecar đã mở port thật và để lại khuôn mẫu dùng lại được.

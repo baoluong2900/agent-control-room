@@ -24,6 +24,12 @@ Pass **2026-08-06 (cuối)**: plan 01 (ref-change runner) và plan 02 (bỏ opti
 `connected` + rename `openProviderSite`) hoàn thành và chuyển sang `done/`; plan 15
 phase 2 (gateway health trong Diagnostics) cũng landed.
 
+Pass **2026-08-06 (pass 3)**: plan 15 phase 1 + 2 đã landed — sidecar manager
+(spawn/stop không mồ côi, port conflict, log cap, local key) và `/health` + Diagnostics
+ba trạng thái. Verify với router thật (`hermes proxy`), không chỉ fake. Tìm ra 2 bug
+thật khi test: sai command làm crash app (`spawn` emit `error` async, không throw), và
+`raceExit` unref grace timer nên escalation bị bỏ qua khi event loop rảnh.
+
 Pass **2026-08-06 (bổ sung)**: hai residual cuối của plan 01 đã xong —
 `webhook` (loopback listener, token bắt buộc, chỉ mở port khi cần) và
 `issue-created` (poll qua `gh` CLI của user, không cần credential mới). **Cả 6
@@ -50,7 +56,7 @@ Thứ tự này tính theo **giá trị / rủi ro**, không phải theo độ k
 
 | # | Plan | Mức | Effort | Vấn đề một dòng |
 | --- | --- | --- | --- | --- |
-| 15 | [ai-gateway-sidecar.md](ai-gateway-sidecar.md) | P3 | XL | Phase 0 + 2 (nhãn proposal, gateway health trong Diagnostics) đã xong; phase 1/3/4/5 cần quyết định sản phẩm |
+| 15 | [ai-gateway-sidecar.md](ai-gateway-sidecar.md) | P3 | XL | Phase 0/1/2 xong (sidecar lifecycle + `/health` + Diagnostics, verify với router thật). Phase 3/4/5 cần quyết định sản phẩm |
 
 ## Completed archive
 

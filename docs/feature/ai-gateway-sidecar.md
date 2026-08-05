@@ -1,6 +1,6 @@
 # 15 — AI gateway / sidecar: tài liệu mô tả router nhưng runtime chưa có server
 
-**Trạng thái: Acceptance ngắn hạn Done · Mức: P3 · Effort: XL · Loại: quyết định sản phẩm trước khi code**
+**Trạng thái: Phase 0, 1, 2 Done · Mức: P3 · Effort: XL · Còn lại: phase 3/4/5 cần quyết định sản phẩm**
 
 Phase 0 đã xong (2026-08-06 verify): `docs/aiagnet.md` đã có banner
 `Status: proposal / future architecture` ở đầu file, README không claim `/v1`
@@ -160,7 +160,67 @@ injectable nên test mới không bao giờ chạm mạng.
 Test: `tests/diagnostics-gateway.test.ts` (6 case), gồm một case pin rằng stored
 `connected` không được che một endpoint đã chết.
 
-## Vì sao phase 1, 3, 4, 5 vẫn chưa làm
+## Phase 1 đã implement (2026-08-06, pass 3)
+
+`src/main/gateway/sidecar-manager.ts`. Lý do hoãn cũ ("sẽ là process đầu tiên mở
+port") **hết hiệu lực** khi webhook listener landed, nên phần còn lại của phase 1
+chỉ là công việc bình thường.
+
+Scope đúng như plan yêu cầu: **chỉ lifecycle**, không route model, không proxy `/v1`.
+Xây route lên một lifecycle chưa chứng minh là cách chắc chắn để có một router mồ côi
+giữ port.
+
+**App không bundle và không tự download binary.** Đó là quyết định sản phẩm plan này
+defer, nên command là **config trong bảng `settings`**
+(`gateway.sidecar.command/args/port/cwd`). Chưa cấu hình = no-op im lặng, không phải
+warning — app cố ý ship không kèm router, mà một badge vàng vĩnh viễn cho trạng thái
+mặc định sẽ dạy user bỏ qua Diagnostics.
+
+### Hai bug thật, tìm ra bằng test chứ không phải bằng đọc
+
+1. **Sai tên command làm crash cả app.** `spawn` **không** throw khi thiếu binary —
+   nó emit `error` ở tick sau. Handler của tôi lại attach *sau* một `await`, nên nó
+   thành `uncaughtException`. Giờ listener được gắn trước khi có bất kỳ chỗ yield
+   nào, và `start()` await kết quả spawn.
+2. **`raceExit` trong `process-tree.ts` dùng `timer.unref()`**, nên trong một process
+   có event loop rảnh thì grace period *co lại*, và child trap SIGTERM bị báo là
+   `exited-on-term` mà **không hề escalate**. Trong Electron và trong test runner luôn
+   có thứ giữ loop mở nên escalation vẫn đúng trong app thật — nhưng đây là cái bẫy
+   đáng biết, và là lý do test mới dùng workload `sh`/`trap` mà suite kill-escalation
+   đã chứng minh, thay vì `node -e` (child Node có một khoảng sau spawn mà handler
+   chưa kịp cài; stop chen vào đúng khoảng đó thì giết luôn và test thành vô nghĩa).
+
+### Chi tiết
+
+| Yêu cầu của plan | Cách làm |
+| --- | --- |
+| Spawn/stop theo lifecycle, không mồ côi | Dùng lại `terminateProcessTree`, **không** `child.kill()` — router fork worker thì worker sẽ giữ port. Có test spawn worker thật rồi assert nó chết theo |
+| Port selection + conflict | Port 0 để OS chọn; port cấu hình bị chiếm thì **báo lỗi**, không âm thầm đổi sang port khác (user chọn port đó vì có thứ đang trỏ vào) |
+| Log có retention | Cap 500 dòng trong memory, không persist — `terminal_logs` retention đã lo phần run output |
+| Local API key | Sinh ngẫu nhiên 32 byte, truyền vào child qua env, bắt buộc cho `/health`, và **strip khỏi log** |
+| Không leak secret vào log | Fake sidecar trong test **cố ý in key ra**, và có test assert nó quay về dạng `***` |
+
+## Phase 2 đã implement (2026-08-06, pass 3)
+
+`probeSidecarHealth` + `collectSidecarChecks`. Diagnostics phân biệt **ba** trạng thái
+cần ba cách sửa khác nhau:
+
+- **crashed** → `fail`, kèm lý do đã ghi (`exited immediately (exit code 3)`)
+- **đang chạy nhưng `/health` im lặng** → `warn`, và **không** khuyên "start it" (process
+  đang sống; vấn đề là flags hoặc chưa boot xong)
+- **healthy** → `ok`
+
+Check xanh **bắt buộc** phải do `/health` trả lời, không bao giờ suy ra từ lifecycle
+state — vì phase 1 promote process thành `running` ngay khi nó sống qua startup.
+
+### Verify với router thật
+
+Không chỉ với fake: `hermes proxy start --port 8646` (một OpenAI-compatible router
+thật có trên máy) — spawn được, `/health` trả **HTTP 200**, capture đúng 5 dòng log
+startup của nó, **không leak key**, stop mất 72ms, và sau đó `lsof` cho thấy không có
+gì giữ port 8646, `pgrep` không còn `hermes proxy` nào.
+
+## Vì sao phase 3, 4, 5 vẫn chưa làm
 
 Không phải nợ kỹ thuật bị bỏ quên — chúng cần quyết định sản phẩm.
 
@@ -179,8 +239,10 @@ câu hỏi sản phẩm: có bundle binary của router hay bắt user tự cài
 hay ngẫu nhiên, và ai chịu trách nhiệm vòng đời process đó khi app đóng. Đó là những
 câu chỉ chủ sản phẩm trả lời được, không phải thứ agent nên tự quyết.
 
-- **Phase 1/3 (sidecar + `/v1`)**: hạ tầng port đã có tiền lệ (xem trên). Còn lại là
-  quyết định bundle/cài đặt, chọn port, và vòng đời process.
+- **Phase 3 (`/v1` streaming)**: hạ tầng đã xong. Còn lại là câu hỏi sản phẩm:
+  adapt provider nào trước, và **cancellation map vào workflow step như thế nào** —
+  hiện step spawn CLI, còn gateway path là HTTP stream, nên cần abstraction
+  "model invocation" chung (mục 4 trong Component đề xuất).
 - **Phase 4 (multi-account OAuth)**: cần đúng những thứ `provider-connection-truth.md`
   đã cố ý loại khỏi scope.
 - **Phase 5 (routing/fallback)**: là một sản phẩm riêng — cần UX rõ trước, và có câu
@@ -200,9 +262,12 @@ tức là *trỏ tới* một router bên ngoài, không phải tự chạy mộ
 
 ## Acceptance dài hạn nếu implement
 
-- [ ] App start/stop sidecar theo lifecycle, không để process mồ côi.
-- [ ] Gateway chỉ bind `127.0.0.1`, có local API key, không leak secret vào logs.
+- [x] App start/stop sidecar theo lifecycle, không để process mồ côi.
+      (Verify với router thật: stop 72ms, port 8646 free, không process sót.)
+- [x] Gateway chỉ bind `127.0.0.1`, có local API key, không leak secret vào logs.
+      (Key strip khỏi log, có test với sidecar cố ý in key ra.)
 - [ ] `/v1/chat/completions` stream hoạt động cho ít nhất một provider.
 - [ ] Cancel request từ workflow/agent dừng stream thật.
-- [ ] Diagnostics biết sidecar healthy/unhealthy và action sửa.
+- [x] Diagnostics biết sidecar healthy/unhealthy và action sửa.
+      (Ba trạng thái: crashed / running-nhưng-không-answer / healthy.)
 - [ ] Fallback policy rõ ràng và không gửi dữ liệu sang provider khác ngoài ý người dùng.
