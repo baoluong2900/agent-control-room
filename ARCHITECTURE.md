@@ -174,10 +174,14 @@ staggered subtasks with difficulty, ETA, and agent assignment. The main process 
 tasks, starts the assigned agent, links the run back to the task, and settles it from the
 process result, with `attemptCount` / `lastError` / `nextRetryAt` driving retry.
 
-> **The planner is heuristic, not an LLM.** `buildTaskPlan()` scores difficulty from word
-> count, keyword hits, and sentence count, then emits a fixed Investigate → Plan → Execute →
-> Verify → Review shape. It does not read your codebase. Steps are assigned only to CLIs
-> actually installed. "AI planning from project context" is a planned feature (T1).
+> **Two planning modes.** The default `heuristic` mode scores difficulty from word count,
+> keyword hits, and sentence count, then emits a fixed Investigate → Plan → Execute → Verify →
+> Review shape without reading your codebase. The opt-in `ai` mode
+> (`src/main/tasks/ai-planner.ts`) asks a real agent CLI for a plan and accepts it **only if it
+> validates** — every failure path (no CLI, timeout, non-zero exit, prose instead of JSON, JSON
+> of the wrong shape, steps naming CLIs that are not installed) falls back to the heuristic
+> plan and records a `fallbackReason`, so a silently-degraded plan cannot pass itself off as
+> model output. Either way, steps are assigned only to CLIs actually installed.
 
 ---
 
@@ -189,9 +193,9 @@ npm test                 # typecheck + the node:test suite
 npm run test:workflows   # the suite alone
 ```
 
-**Current status: 243/243 passing, typecheck clean, `npm audit` 0 vulnerabilities.**
+**Current status: 256/256 passing, typecheck clean, `npm audit` 0 vulnerabilities.**
 
-29 suites run against the real repository classes on in-memory `node:sqlite` — not mocks.
+30 suites run against the real repository classes on in-memory `node:sqlite` — not mocks.
 TypeScript executes directly through a small loader in `tests/support/` built on the
 already-installed `typescript` package, so the suite adds no test-runner dependency.
 
@@ -247,7 +251,7 @@ open an external login page — the app does not complete a token exchange (S1).
 
 | Area | Reality today |
 | --- | --- |
-| Task planner | Heuristic scoring, not LLM planning |
+| Task planner | Heuristic by default; opt-in `ai` mode validates CLI output and falls back |
 | Remote triggers | `git-push` / `issue-created` / `webhook` gated, no listener |
 | Provider OAuth | Opens external URL; no callback or device-code exchange |
 | AI gateway (`docs/aiagnet.md`) | **Proposal only** — no sidecar, no `/v1` endpoint. `baseUrl` can point at a router you run yourself |

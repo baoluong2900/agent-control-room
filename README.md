@@ -5,7 +5,7 @@
 > and Git inspection. No hosted backend, no telemetry, no account.
 
 [![desktop-build](https://github.com/baoluong2900/agent-control-room/actions/workflows/desktop-build.yml/badge.svg)](https://github.com/baoluong2900/agent-control-room/actions/workflows/desktop-build.yml)
-![tests](https://img.shields.io/badge/tests-243%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-256%20passing-brightgreen)
 ![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)
