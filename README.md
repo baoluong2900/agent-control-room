@@ -1,8 +1,23 @@
 # Agentic Workspace
 
+> Local-first desktop workspace that turns the AI coding CLIs already on your machine into one
+> managed control room — agent profiles, workflows, scheduled tasks, a code-knowledge index,
+> and Git inspection. No hosted backend, no telemetry, no account.
+
+[![desktop-build](https://github.com/baoluong2900/agentic-workspace/actions/workflows/desktop-build.yml/badge.svg)](https://github.com/baoluong2900/agentic-workspace/actions/workflows/desktop-build.yml)
+![tests](https://img.shields.io/badge/tests-243%20passing-brightgreen)
+![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
 Local-first Electron desktop app for coordinating AI CLI agents across project folders.
 
-This repo now follows the Phase 1 direction in [image/phase_1.md](image/phase_1.md): Electron + React + TypeScript, secure preload IPC, local CLI/process control, 3D agent map, realtime terminal output, local SQLite history, and Git diff inspection.
+Electron + React + TypeScript, secure preload IPC, local CLI/process control, 3D agent map, realtime terminal output, local SQLite history, and Git diff inspection.
+
+Architecture and the honest feature status live in [ARCHITECTURE.md](ARCHITECTURE.md); the
+review map is [docs/source-map.md](docs/source-map.md) and the known gaps are tracked in
+[docs/unfinished-features.md](docs/unfinished-features.md).
 
 ## Requirements
 
@@ -198,6 +213,17 @@ npm run make:linux
 ```
 
 Electron Forge is configured with makers for Windows Squirrel, macOS ZIP, Linux DEB, and Linux RPM.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Short version: `npm run typecheck` and `npm test` must
+stay green, new test files have to be registered in `package.json` → `test:workflows`, and the
+main-process rules in that document (no `shell: true`, no secrets in SQLite, no generic preload
+invoke) are hard requirements.
+
+## License
+
+[MIT](LICENSE) © baoluong0209
 
 ## Legacy web fallback
 
