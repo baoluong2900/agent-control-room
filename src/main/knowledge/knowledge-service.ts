@@ -17,6 +17,7 @@ import type {
   KnowledgeTruncationReport,
 } from "@contracts";
 import type { DesktopDatabase, KnowledgeFileRecord } from "../database/desktop-database";
+import { parseModule } from "./ast-parser";
 import { type AliasResolver, loadAliasResolver } from "./tsconfig-aliases";
 
 type ScanCandidate = {
@@ -443,8 +444,15 @@ function analyzeFile(candidate: ScanCandidate, content: string): KnowledgeFileIn
   const extension = path.extname(candidate.relativePath).toLowerCase() || path.basename(candidate.relativePath);
   const language = languageForFile(candidate.relativePath, extension);
   const category = categoryForPath(candidate.relativePath, extension);
-  const symbols = unique(extractSymbols(content)).slice(0, 40);
-  const exports = unique(extractExports(content)).slice(0, 40);
+
+  // TypeScript/JavaScript go through the real parser, so a commented-out import or
+  // a specifier inside a string literal no longer becomes a graph edge. Everything
+  // else keeps the regex extractors: the TS compiler cannot parse Python or Go, and
+  // a wrong parser is worse than a crude one.
+  const parsed = parseModule(candidate.relativePath, content);
+  const symbols = unique(parsed ? parsed.symbols : extractSymbols(content)).slice(0, 40);
+  const exports = unique(parsed ? parsed.exports : extractExports(content)).slice(0, 40);
+  const imports = unique(parsed ? parsed.imports : extractImports(content)).slice(0, 60);
 
   return {
     path: candidate.relativePath,
@@ -455,7 +463,7 @@ function analyzeFile(candidate: ScanCandidate, content: string): KnowledgeFileIn
     sizeBytes: candidate.sizeBytes,
     lines: countLines(content),
     symbols,
-    imports: unique(extractImports(content)).slice(0, 60),
+    imports,
     exports,
     contentSample: sampleContent(content),
     updatedAt: candidate.updatedAt,
