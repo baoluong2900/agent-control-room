@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { WebContents } from "electron";
 import type {
   KnowledgeCategoryStat,
   KnowledgeCodeGraph,
@@ -10,6 +11,7 @@ import type {
   KnowledgeGraphNode,
   KnowledgeLanguageStat,
   KnowledgeScanInput,
+  KnowledgeScanProgress,
   KnowledgeSnapshot,
   KnowledgeTruncationReport,
 } from "@contracts";
@@ -113,11 +115,49 @@ const supportedExtensions = new Set([
 
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".cs"]);
 
+/**
+ * Files read concurrently. Bounded deliberately: unbounded `Promise.all` over a
+ * whole repo exhausts the file-descriptor limit, and the win over sequential
+ * reads is already most of the way there by 8 on an SSD.
+ */
+const READ_CONCURRENCY = 8;
+
+/** Files analyzed between progress emissions. */
+const PROGRESS_INTERVAL = 16;
+
+/** Raised to unwind a cancelled scan; never escapes `scan()`. */
+class ScanCancelledError extends Error {
+  constructor() {
+    super("Knowledge scan cancelled");
+    this.name = "ScanCancelledError";
+  }
+}
+
 export class KnowledgeService {
-  constructor(private readonly database: DesktopDatabase) {}
+  /** Scan ids the renderer has asked to stop, consumed by the scan loop. */
+  private readonly cancelled = new Set<string>();
+
+  constructor(
+    private readonly database: DesktopDatabase,
+    /**
+     * Optional so tests and harnesses can construct the service without an
+     * Electron window; progress is simply not published when absent.
+     */
+    private readonly webContentsProvider?: () => WebContents | null,
+  ) {}
 
   get(projectPath: string): KnowledgeSnapshot | null {
     return this.database.getKnowledgeSnapshot(path.resolve(projectPath));
+  }
+
+  /**
+   * Marks a scan for cancellation. Returns true when the id was live, so the
+   * caller can tell a real cancel from a stale click on a finished scan.
+   */
+  cancelScan(scanId: string): boolean {
+    if (!scanId) return false;
+    this.cancelled.add(scanId);
+    return true;
   }
 
   async scan(input: KnowledgeScanInput): Promise<KnowledgeSnapshot> {
@@ -127,9 +167,57 @@ export class KnowledgeService {
       throw new Error(`Project folder does not exist: ${projectPath}`);
     }
 
+    const scanId = input.scanId;
+    try {
+      return await this.runScan(projectPath, input, scanId);
+    } catch (error) {
+      if (error instanceof ScanCancelledError) {
+        this.webContentsProvider?.()?.send("knowledge:progress", {
+          scanId: scanId ?? "",
+          projectPath,
+          phase: "cancelled",
+          processed: 0,
+          total: 0,
+        } satisfies KnowledgeScanProgress);
+        // A cancelled scan wrote nothing, so the previous snapshot is still the
+        // truth. Returning it keeps the renderer's contract (`scan` resolves to a
+        // snapshot) without inventing an empty one that would blank the UI.
+        const existing = this.get(projectPath);
+        if (existing) return existing;
+      }
+      throw error;
+    } finally {
+      // Whether it finished, threw, or was cancelled, the id is spent. Leaving it
+      // in the set would cancel the *next* scan that reused it.
+      if (scanId) this.cancelled.delete(scanId);
+    }
+  }
+
+  private async runScan(
+    projectPath: string,
+    input: KnowledgeScanInput,
+    scanId: string | undefined,
+  ): Promise<KnowledgeSnapshot> {
     const maxFiles = clampInt(input.maxFiles ?? defaultMaxFiles, 20, 5_000);
     const maxFileBytes = clampInt(input.maxFileBytes ?? defaultMaxFileBytes, 20_000, 1_000_000);
+
+    const emit = (progress: Omit<KnowledgeScanProgress, "scanId" | "projectPath">): void => {
+      if (!scanId) return;
+      this.webContentsProvider?.()?.send("knowledge:progress", {
+        scanId,
+        projectPath,
+        ...progress,
+      } satisfies KnowledgeScanProgress);
+    };
+
+    const throwIfCancelled = (): void => {
+      if (scanId && this.cancelled.has(scanId)) throw new ScanCancelledError();
+    };
+
+    emit({ phase: "collecting", processed: 0, total: 0 });
     const collected = await collectFiles(projectPath, maxFiles, maxFileBytes);
+    throwIfCancelled();
+
     const files: KnowledgeFileInsight[] = [];
     const truncation: TruncationAccumulator = {
       hitFileLimit: collected.hitFileLimit,
@@ -144,23 +232,46 @@ export class KnowledgeService {
       largestSkipped: collected.largestSkipped,
     };
 
-    for (const candidate of collected.files) {
-      const content = await fs.readFile(candidate.absolutePath, "utf8").catch(() => null);
-      if (content === null) {
-        truncation.skippedUnreadable += 1;
-        trackLargestSkipped(truncation.largestSkipped, candidate.relativePath, candidate.sizeBytes);
-        continue;
-      }
-      if (looksBinary(content)) {
-        truncation.skippedBinary += 1;
-        trackLargestSkipped(truncation.largestSkipped, candidate.relativePath, candidate.sizeBytes);
-        continue;
+    const total = collected.files.length;
+    let processed = 0;
+
+    // Batched rather than sequential: the old loop awaited one readFile at a time,
+    // so scan cost was a straight line in file count. Cancellation is checked per
+    // batch, which is a fine granularity — no need to abort mid-read.
+    for (let offset = 0; offset < collected.files.length; offset += READ_CONCURRENCY) {
+      throwIfCancelled();
+      const batch = collected.files.slice(offset, offset + READ_CONCURRENCY);
+      const contents = await Promise.all(
+        batch.map(async (candidate) => ({
+          candidate,
+          content: await fs.readFile(candidate.absolutePath, "utf8").catch(() => null),
+        })),
+      );
+
+      for (const { candidate, content } of contents) {
+        processed += 1;
+        if (content === null) {
+          truncation.skippedUnreadable += 1;
+          trackLargestSkipped(truncation.largestSkipped, candidate.relativePath, candidate.sizeBytes);
+          continue;
+        }
+        if (looksBinary(content)) {
+          truncation.skippedBinary += 1;
+          trackLargestSkipped(truncation.largestSkipped, candidate.relativePath, candidate.sizeBytes);
+          continue;
+        }
+
+        files.push(analyzeFile(candidate, content));
       }
 
-      files.push(analyzeFile(candidate, content));
+      if (processed % PROGRESS_INTERVAL < READ_CONCURRENCY || processed === total) {
+        emit({ phase: "analyzing", processed, total, currentPath: batch.at(-1)?.relativePath });
+      }
     }
 
+    throwIfCancelled();
     truncation.filesIndexed = files.length;
+    emit({ phase: "graphing", processed, total });
     // Read once per scan, not per import: the tsconfig chain is filesystem work
     // and every file in the project resolves against the same alias table.
     const aliases = await loadAliasResolver(projectPath);
@@ -190,6 +301,7 @@ export class KnowledgeService {
     snapshot.agentBrief = buildAgentBrief(snapshot);
 
     this.database.saveKnowledgeSnapshot(snapshot);
+    emit({ phase: "done", processed, total });
     return snapshot;
   }
 

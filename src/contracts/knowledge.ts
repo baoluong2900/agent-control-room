@@ -8,6 +8,22 @@ export interface KnowledgeScanInput {
   projectPath: string;
   maxFiles?: number;
   maxFileBytes?: number;
+  /**
+   * Correlates progress events and cancellation with this scan. Supplied by the
+   * renderer so it can cancel a scan it started without waiting for the invoke to
+   * resolve — which, for a large repo, is the whole point.
+   */
+  scanId?: string;
+}
+
+/** Where a scan is in its walk, pushed to the renderer as it advances. */
+export interface KnowledgeScanProgress {
+  scanId: string;
+  projectPath: string;
+  phase: "collecting" | "analyzing" | "graphing" | "done" | "cancelled";
+  processed: number;
+  total: number;
+  currentPath?: string;
 }
 
 export interface KnowledgeLanguageStat {

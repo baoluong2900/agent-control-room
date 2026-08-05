@@ -46,6 +46,7 @@ export type {
   KnowledgeGraphNodeKind,
   KnowledgeLanguageStat,
   KnowledgeScanInput,
+  KnowledgeScanProgress,
   KnowledgeSnapshot,
   KnowledgeTruncationReport,
 } from "./knowledge";

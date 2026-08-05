@@ -142,6 +142,7 @@ export function registerIpcHandlers({
 
   ipcMain.handle("knowledge:get", (_event, projectPath: string) => knowledgeService.get(projectPath));
   ipcMain.handle("knowledge:scan", (_event, input: KnowledgeScanInput) => knowledgeService.scan(input));
+  ipcMain.handle("knowledge:cancel", (_event, scanId: string) => knowledgeService.cancelScan(scanId));
   ipcMain.handle("knowledge:export", (_event, projectPath: string, format: KnowledgeExportFormat) =>
     knowledgeService.export(projectPath, format),
   );

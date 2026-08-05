@@ -8,6 +8,7 @@ import type {
   AppIdentityInput,
   KnowledgeExportFormat,
   KnowledgeScanInput,
+  KnowledgeScanProgress,
   ProviderConnectionAuthRequest,
   ProviderConnectionInput,
   TaskEvent,
@@ -95,6 +96,7 @@ const api: AgenticDesktopApi = {
   knowledge: {
     get: (projectPath: string) => ipcRenderer.invoke("knowledge:get", projectPath),
     scan: (input: KnowledgeScanInput) => ipcRenderer.invoke("knowledge:scan", input),
+    cancelScan: (scanId: string) => ipcRenderer.invoke("knowledge:cancel", scanId),
     export: (projectPath: string, format: KnowledgeExportFormat) =>
       ipcRenderer.invoke("knowledge:export", projectPath, format),
   },
@@ -113,6 +115,11 @@ const api: AgenticDesktopApi = {
       const listener = (_event: Electron.IpcRendererEvent, payload: TaskEvent) => callback(payload);
       ipcRenderer.on("task:event", listener);
       return () => ipcRenderer.removeListener("task:event", listener);
+    },
+    subscribeKnowledge: (callback: (event: KnowledgeScanProgress) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: KnowledgeScanProgress) => callback(payload);
+      ipcRenderer.on("knowledge:progress", listener);
+      return () => ipcRenderer.removeListener("knowledge:progress", listener);
     },
   },
 };

@@ -11,17 +11,19 @@ import {
   Network,
   RefreshCw,
   Search,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import type {
   KnowledgeExportFormat,
   KnowledgeFileInsight,
   KnowledgeGraphEdge,
+  KnowledgeScanProgress,
   KnowledgeSnapshot,
   ProjectSummary,
 } from "@contracts";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./knowledge.css";
 
 type KnowledgeModuleProps = {
@@ -49,6 +51,11 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
   const [error, setError] = useState<string | null>(null);
   const [scanMaxFiles, setScanMaxFiles] = useState(1_200);
   const [scanMaxFileBytes, setScanMaxFileBytes] = useState(220_000);
+  const [progress, setProgress] = useState<KnowledgeScanProgress | null>(null);
+  // Held in a ref, not state: the cancel button and the progress listener both
+  // need the current id without re-rendering, and a scan started before a
+  // re-render must still be cancellable.
+  const activeScanId = useRef<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -105,6 +112,25 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
     return snapshot.files.find((file) => file.path === selectedPath) ?? filteredFiles[0] ?? snapshot.files[0] ?? null;
   }, [filteredFiles, selectedPath, snapshot]);
 
+  useEffect(() => {
+    // Progress arrives on a push channel rather than as the invoke's return value,
+    // because the invoke does not resolve until the whole scan is done — which on a
+    // large repo is exactly the window the user has no feedback for.
+    return window.agentic.events.subscribeKnowledge((event) => {
+      // Ignore progress from a scan this component did not start (a stale scan
+      // whose id was already retired, or another window's).
+      if (event.scanId !== activeScanId.current) return;
+      setProgress(event.phase === "done" || event.phase === "cancelled" ? null : event);
+    });
+  }, []);
+
+  const cancelScan = useCallback(async () => {
+    const scanId = activeScanId.current;
+    if (!scanId) return;
+    await window.agentic.knowledge.cancelScan(scanId);
+    setNotice("Scan cancelled; the previous snapshot is unchanged.");
+  }, []);
+
   async function scanProject(options?: { projectPath?: string; maxFiles?: number; maxFileBytes?: number }) {
     let projectPath = options?.projectPath ?? project?.path ?? null;
     if (!projectPath) {
@@ -115,7 +141,10 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
 
     if (!projectPath) return;
 
+    const scanId = `scan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    activeScanId.current = scanId;
     setScanning(true);
+    setProgress(null);
     setError(null);
     setNotice(null);
     try {
@@ -123,6 +152,7 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
         projectPath,
         maxFiles: options?.maxFiles ?? scanMaxFiles,
         maxFileBytes: options?.maxFileBytes ?? scanMaxFileBytes,
+        scanId,
       });
       setSnapshot(next);
       setSelectedPath(next.files[0]?.path ?? null);
@@ -134,6 +164,8 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
     } catch (nextError) {
       setError(formatError(nextError));
     } finally {
+      activeScanId.current = null;
+      setProgress(null);
       setScanning(false);
     }
   }
@@ -192,8 +224,16 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
             <RefreshCw size={15} className={scanning ? "spin" : ""} />
             {scanning ? "Indexing" : "Scan"}
           </button>
+          {scanning && (
+            <button className="ghost-button" onClick={() => void cancelScan()}>
+              <X size={15} />
+              Cancel
+            </button>
+          )}
         </div>
       </section>
+
+      {progress && <ScanProgressBar progress={progress} />}
 
       {error && <p className="knowledge-banner error">{error}</p>}
       {notice && <p className="knowledge-banner">{notice}</p>}
@@ -317,6 +357,39 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Live scan feedback. Deliberately shows the phase as well as the count: the
+ * `collecting` walk reports no total yet, so a bare "0 / 0" would look stalled
+ * on a big repo when it is in fact working.
+ */
+function ScanProgressBar({ progress }: { progress: KnowledgeScanProgress }) {
+  const { phase, processed, total, currentPath } = progress;
+  const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+  const label =
+    phase === "collecting"
+      ? "Walking the project tree…"
+      : phase === "graphing"
+        ? "Building the code graph…"
+        : `Analyzing ${processed} of ${total} files`;
+
+  return (
+    <section className="knowledge-progress" aria-label="Scan progress">
+      <div className="knowledge-progress-head">
+        <span>{label}</span>
+        {total > 0 && phase === "analyzing" && <span className="knowledge-progress-percent">{percent}%</span>}
+      </div>
+      <div className="knowledge-progress-track">
+        {/* Indeterminate until there is a real total to divide by. */}
+        <div
+          className={`knowledge-progress-fill${total > 0 && phase === "analyzing" ? "" : " indeterminate"}`}
+          style={total > 0 && phase === "analyzing" ? { width: `${percent}%` } : undefined}
+        />
+      </div>
+      {currentPath && <p className="knowledge-progress-path">{currentPath}</p>}
+    </section>
   );
 }
 

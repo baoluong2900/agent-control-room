@@ -742,6 +742,70 @@
   stroke-width: 2;
 }
 
+/*
+ * Scan progress. Sits directly under the toolbar so the feedback appears where
+ * the user clicked Scan, rather than further down past the stat cards.
+ */
+.knowledge-progress {
+  background: rgba(23, 18, 43, 0.72);
+  border: 1px solid rgba(148, 128, 232, 0.24);
+  border-radius: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+}
+
+.knowledge-progress-head {
+  align-items: center;
+  color: #cfc3f7;
+  display: flex;
+  font-size: 12px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.knowledge-progress-percent {
+  color: #8ce7ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.knowledge-progress-track {
+  background: rgba(12, 9, 24, 0.85);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.knowledge-progress-fill {
+  background: linear-gradient(90deg, #6d8dff, #8ce7ff);
+  border-radius: 999px;
+  height: 100%;
+  transition: width 140ms linear;
+}
+
+/* The tree walk has no total to divide by, so sweep instead of claiming 0%. */
+.knowledge-progress-fill.indeterminate {
+  animation: knowledge-progress-sweep 1.1s ease-in-out infinite;
+  width: 35%;
+}
+
+@keyframes knowledge-progress-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+.knowledge-progress-path {
+  color: #8f83b8;
+  font-size: 11px;
+  margin: 8px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .node-category {
   stroke: #5ee38d;
 }

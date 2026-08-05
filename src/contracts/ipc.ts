@@ -12,7 +12,13 @@ import type {
   AgentSessionSummary,
 } from "./agent";
 import type { GitCommitSummary, GitDiffSummary, GitFileDiff, GitOperationResult, ProjectSummary } from "./project";
-import type { KnowledgeExportFormat, KnowledgeExportResult, KnowledgeScanInput, KnowledgeSnapshot } from "./knowledge";
+import type {
+  KnowledgeExportFormat,
+  KnowledgeExportResult,
+  KnowledgeScanInput,
+  KnowledgeScanProgress,
+  KnowledgeSnapshot,
+} from "./knowledge";
 import type {
   AppIdentity,
   AppIdentityInput,
@@ -118,11 +124,14 @@ export interface AgenticDesktopApi {
   knowledge: {
     get: (projectPath: string) => Promise<KnowledgeSnapshot | null>;
     scan: (input: KnowledgeScanInput) => Promise<KnowledgeSnapshot>;
+    /** Requests cancellation of an in-flight scan by its `scanId`. */
+    cancelScan: (scanId: string) => Promise<boolean>;
     export: (projectPath: string, format: KnowledgeExportFormat) => Promise<KnowledgeExportResult>;
   };
   events: {
     subscribe: (callback: (event: AgentEvent) => void) => () => void;
     subscribeWorkflow: (callback: (event: WorkflowEvent) => void) => () => void;
     subscribeTask: (callback: (event: TaskEvent) => void) => () => void;
+    subscribeKnowledge: (callback: (event: KnowledgeScanProgress) => void) => () => void;
   };
 }
