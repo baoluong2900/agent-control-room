@@ -145,17 +145,10 @@ export class WorkflowSchedulerService {
     const fired: string[] = [];
 
     try {
-      for (const workflow of this.workflows.list()) {
-        if (!this.isRefChangeCandidate(workflow)) continue;
-
-        const root = path.resolve(workflow.projectPath as string);
-        const config = parseRefTrigger(workflow.trigger.detail);
-        const ref = config.remote ? `refs/remotes/${config.remote}/${config.branch ?? "HEAD"}` : config.branch ?? "HEAD";
-
+      for (const { workflow, root, ref, key, config } of this.refTargets()) {
         const sha = await this.resolveRef(root, ref);
         if (!sha) continue;
 
-        const key = `${root}@${ref}`;
         const previous = this.lastRefSha.get(key);
         // Always record first: a poll that observes a new SHA and then fails to run
         // must not re-fire the same commit on the next tick.
@@ -201,25 +194,36 @@ export class WorkflowSchedulerService {
    * than "the app has not seen this SHA before".
    */
   async seedRefBaselines(): Promise<void> {
-    for (const workflow of this.workflows.list()) {
-      if (!this.isRefChangeCandidate(workflow)) continue;
-      const root = path.resolve(workflow.projectPath as string);
-      const config = parseRefTrigger(workflow.trigger.detail);
-      const ref = config.remote ? `refs/remotes/${config.remote}/${config.branch ?? "HEAD"}` : config.branch ?? "HEAD";
-      const key = `${root}@${ref}`;
+    for (const { root, ref, key } of this.refTargets()) {
       if (this.lastRefSha.has(key)) continue;
       const sha = await this.resolveRef(root, ref);
       if (sha) this.lastRefSha.set(key, sha);
     }
   }
 
-  private isRefChangeCandidate(workflow: WorkflowDefinition): boolean {
-    return (
-      workflow.status === "active" &&
-      workflow.trigger.type === "git-push" &&
-      Boolean(workflow.projectPath) &&
-      workflow.steps.some((step) => step.enabled)
-    );
+  /**
+   * Every ref a `git-push` workflow is watching, with the ref and cache key already
+   * resolved. Shared by the poll and the seeder so the two can never disagree about
+   * which ref a workflow means.
+   */
+  private *refTargets(): Generator<{
+    workflow: WorkflowDefinition;
+    root: string;
+    ref: string;
+    key: string;
+    config: RefTrigger;
+  }> {
+    for (const workflow of this.workflows.list()) {
+      const { projectPath, status, trigger, steps } = workflow;
+      if (status !== "active" || trigger.type !== "git-push" || !projectPath) continue;
+      if (!steps.some((step) => step.enabled)) continue;
+
+      const root = path.resolve(projectPath);
+      const config = parseRefTrigger(trigger.detail);
+      const branch = config.branch ?? "HEAD";
+      const ref = config.remote ? `refs/remotes/${config.remote}/${branch}` : branch;
+      yield { workflow, root, ref, key: `${root}@${ref}`, config };
+    }
   }
 
   /** The SHA a ref points at, or null when the repo or ref does not resolve. */
@@ -348,6 +352,9 @@ export class WorkflowSchedulerService {
   }
 }
 
+/** A `git-push` trigger's parsed `detail`; both fields absent means "watch HEAD". */
+export type RefTrigger = { branch?: string; remote?: string };
+
 /**
  * Reads a `git-push` trigger's `detail` field.
  *
@@ -357,12 +364,12 @@ export class WorkflowSchedulerService {
  * (`branch=main, remote=origin`). Anything unparseable degrades to watching HEAD,
  * which is the behaviour of an unconfigured trigger.
  */
-export function parseRefTrigger(detail?: string | null): { branch?: string; remote?: string } {
+export function parseRefTrigger(detail?: string | null): RefTrigger {
   const text = detail?.trim();
   if (!text) return {};
 
   if (text.includes("=")) {
-    const config: { branch?: string; remote?: string } = {};
+    const config: RefTrigger = {};
     for (const part of text.split(/[,\n]/)) {
       const [rawKey, ...rest] = part.split("=");
       const key = rawKey?.trim().toLowerCase();
