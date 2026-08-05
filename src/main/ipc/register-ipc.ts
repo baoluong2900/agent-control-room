@@ -36,6 +36,7 @@ import type { TaskAutomationService } from "../tasks/task-automation-service";
 import type { WebhookCoordinator } from "../workflows/webhook-coordinator";
 import type { WorkflowSchedulerService } from "../workflows/workflow-scheduler";
 import type { WorkflowService } from "../workflows/workflow-service";
+import { type SidecarManager, probeSidecarHealth } from "../gateway/sidecar-manager";
 import { collectDiagnostics } from "./diagnostics";
 
 /**
@@ -56,6 +57,7 @@ export function registerIpcHandlers({
   projectService,
   settingsService,
   taskAutomationService,
+  sidecarManager,
   webhookCoordinator,
   workflowSchedulerService,
   workflowService,
@@ -66,12 +68,20 @@ export function registerIpcHandlers({
   projectService: ProjectService;
   settingsService: SettingsService;
   taskAutomationService: TaskAutomationService;
+  /** Optional: harnesses and tests run without a gateway sidecar. */
+  sidecarManager?: SidecarManager;
   webhookCoordinator: WebhookCoordinator;
   workflowSchedulerService: WorkflowSchedulerService;
   workflowService: WorkflowService;
 }): void {
   ipcMain.handle("system:diagnostics", (_event, projectPath?: string | null) =>
-    collectDiagnostics(database, settingsService, projectPath),
+    collectDiagnostics(database, settingsService, projectPath, {
+      // Optional so the harnesses, which have no sidecar, keep working unchanged.
+      sidecarStatus: sidecarManager?.status(),
+      probeSidecarHealth: sidecarManager
+        ? (baseUrl) => probeSidecarHealth(baseUrl, sidecarManager.ensureLocalKey())
+        : undefined,
+    }),
   );
 
   ipcMain.handle("project:select-folder", () => projectService.selectFolder());

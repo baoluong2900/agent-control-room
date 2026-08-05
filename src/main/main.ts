@@ -9,6 +9,7 @@ import { ProviderSecretVault } from "./settings/provider-secret-vault";
 import { SettingsService } from "./settings/settings-service";
 import { KnowledgeService } from "./knowledge/knowledge-service";
 import { TaskAutomationService } from "./tasks/task-automation-service";
+import { SidecarManager, probeSidecarHealth, readSidecarConfig } from "./gateway/sidecar-manager";
 import { WebhookCoordinator } from "./workflows/webhook-coordinator";
 import { WorkflowSchedulerService } from "./workflows/workflow-scheduler";
 import { WorkflowService } from "./workflows/workflow-service";
@@ -20,6 +21,7 @@ let processManager: AgentProcessManager | null = null;
 let taskAutomationService: TaskAutomationService | null = null;
 let workflowSchedulerService: WorkflowSchedulerService | null = null;
 let webhookCoordinator: WebhookCoordinator | null = null;
+let sidecarManager: SidecarManager | null = null;
 
 /**
  * The schedulers keep ticking after the last window closes (macOS keeps the app
@@ -50,6 +52,9 @@ app.whenReady().then(async () => {
   ensureAgentPath();
 
   database = await DesktopDatabase.open(app.getPath("userData"));
+  // Non-null local for the closures below; `database` itself is nullable because
+  // the quit handler runs outside this scope.
+  const db = database;
 
   const providerSecretVault = new ProviderSecretVault(app.getPath("userData"), safeStorage);
   const agentProcessManager = new AgentProcessManager(database, activeWebContents, providerSecretVault);
@@ -73,6 +78,18 @@ app.whenReady().then(async () => {
     workflowSchedulerService,
     activeWebContents,
   );
+  sidecarManager = new SidecarManager({
+    // Read on every start so editing the command does not need an app restart.
+    readConfig: () => readSidecarConfig(db),
+    onEvent: (message) =>
+      activeWebContents()?.send("workflow:event", {
+        type: "workflow:log",
+        workflowId: "",
+        workflowRunId: "",
+        message,
+        timestamp: new Date().toISOString(),
+      }),
+  });
 
   registerIpcHandlers({
     agentProcessManager,
@@ -80,6 +97,7 @@ app.whenReady().then(async () => {
     knowledgeService,
     projectService,
     settingsService,
+    sidecarManager,
     taskAutomationService,
     webhookCoordinator,
     workflowSchedulerService,
@@ -92,6 +110,8 @@ app.whenReady().then(async () => {
   // Opens a port only if a webhook workflow is already active; otherwise this is a
   // no-op and nothing listens.
   void webhookCoordinator.sync();
+  // No-op unless a sidecar command has been configured.
+  void sidecarManager.start();
 
   // Dev-only visual QA hook: AGENTIC_SNAPSHOT=<path> writes one PNG of the
   // rendered window, then quits. Never runs in packaged builds.
@@ -145,6 +165,9 @@ app.on("before-quit", () => {
   // Stop accepting deliveries before the database closes: an in-flight webhook run
   // writes to it, which is the same write-after-close trap the process manager hit.
   void webhookCoordinator?.stop();
+  // Kills the sidecar's whole tree, so quitting cannot leave a router orphaned on
+  // the port it was given.
+  void sidecarManager?.stop();
   processManager?.stopAll();
   database?.close();
 });

@@ -13,6 +13,7 @@ import type {
 import { listAgentCatalog } from "../agents/catalog";
 import { pingAgentCli } from "../agents/probe";
 import type { DesktopDatabase } from "../database/desktop-database";
+import type { SidecarHealth, SidecarStatus } from "../gateway/sidecar-manager";
 import { readGitDiff } from "../git/git-service";
 import { defaultEndpointProbe, type EndpointProbe } from "../settings/provider-verification";
 import type { SettingsService } from "../settings/settings-service";
@@ -28,6 +29,10 @@ export type DiagnosticsDependencies = {
   checkProject?: typeof collectProjectChecks;
   /** Injection seam: the live gateway probe, so tests never touch the network. */
   probeEndpoint?: EndpointProbe;
+  /** Current sidecar lifecycle state; omitted when the app has no sidecar manager. */
+  sidecarStatus?: SidecarStatus;
+  /** Injection seam: the sidecar `/health` probe. */
+  probeSidecarHealth?: (baseUrl: string) => Promise<SidecarHealth>;
   now?: Date;
 };
 
@@ -90,6 +95,9 @@ export async function collectDiagnostics(
     // Live, unlike every other provider check: a gateway is a process the user
     // starts and stops outside this app, so stored status cannot answer "is it up".
     ...(await collectGatewayChecks(connections, dependencies.probeEndpoint)),
+    ...(dependencies.sidecarStatus && dependencies.probeSidecarHealth
+      ? await collectSidecarChecks(dependencies.sidecarStatus, dependencies.probeSidecarHealth)
+      : []),
   ];
 
   return {
@@ -356,6 +364,88 @@ export async function collectGatewayChecks(
       };
     }),
   );
+}
+
+/**
+ * Reports the gateway sidecar's process lifecycle and readiness.
+ *
+ * Distinct from `collectGatewayChecks`, which probes an endpoint the *user* runs
+ * themselves. This one covers a process the app owns, so it can separate three
+ * states that need three different fixes: not configured (nothing to do), running
+ * but not answering (wrong flags / still booting), and crashed (bad command).
+ */
+export async function collectSidecarChecks(
+  status: SidecarStatus,
+  probeHealth: (baseUrl: string) => Promise<SidecarHealth>,
+): Promise<DiagnosticCheck[]> {
+  // Silence rather than a warning: the app ships without a bundled router on
+  // purpose, so an unconfigured sidecar is the normal state, not a problem.
+  if (!status.configured) return [];
+
+  const label = "AI gateway sidecar";
+
+  if (status.state === "failed") {
+    return [
+      {
+        key: "sidecar:process",
+        label,
+        status: "fail",
+        detail: status.error ?? "The sidecar failed to start.",
+        action: { label: "Open Settings", target: "settings" },
+      },
+    ];
+  }
+
+  if (status.state !== "running" || !status.baseUrl) {
+    return [
+      {
+        key: "sidecar:process",
+        label,
+        status: "warn",
+        detail: "Configured but not running.",
+        action: { label: "Open Settings", target: "settings" },
+      },
+    ];
+  }
+
+  const health = await probeHealth(status.baseUrl);
+
+  if (!health.reachable) {
+    return [
+      {
+        key: "sidecar:process",
+        label,
+        status: "warn",
+        // The process is alive, so this is not "start it" — it is "it is not
+        // serving yet, or it is not serving what we expect".
+        detail: `Process is running (pid ${status.pid}) but ${status.baseUrl}/health did not answer${
+          health.detail ? ` (${health.detail})` : ""
+        }.`,
+        action: { label: "Open Settings", target: "settings" },
+      },
+    ];
+  }
+
+  if (health.statusCode !== undefined && health.statusCode >= 400) {
+    return [
+      {
+        key: "sidecar:process",
+        label,
+        status: "warn",
+        detail: `${status.baseUrl}/health answered ${health.statusCode}. Check the sidecar's own configuration.`,
+        action: { label: "Open Settings", target: "settings" },
+      },
+    ];
+  }
+
+  return [
+    {
+      key: "sidecar:process",
+      label,
+      status: "ok",
+      detail: `Healthy on ${status.baseUrl} (pid ${status.pid}).`,
+    },
+  ];
 }
 
 async function resolveBinary(command: string): Promise<string | null> {
