@@ -43,7 +43,12 @@ export type SidecarConfig = {
   env?: Record<string, string>;
 };
 
-export type SidecarState = "stopped" | "starting" | "running" | "failed";
+/**
+ * No `starting`: `start()` resolves once the child has spawned or failed, so a caller
+ * never observes an in-between state. Phase 3 can add one if a readiness handshake
+ * makes the distinction real.
+ */
+export type SidecarState = "stopped" | "running" | "failed";
 
 export type SidecarStatus = {
   state: SidecarState;
@@ -147,6 +152,8 @@ export class SidecarManager {
   private port: number | null = null;
   private lastError: string | null = null;
   private startedAt: Date | null = null;
+  /** Spawn time of the current child, kept separate: `stop()` clears `startedAt`. */
+  private spawnedAtMs = 0;
   private restarts = 0;
   private localKey: string | null = null;
   private readonly logs: SidecarLogLine[] = [];
@@ -250,15 +257,14 @@ export class SidecarManager {
     }
 
     this.child = child;
-    this.state = "starting";
     this.port = port;
     this.lastError = null;
     this.startedAt = new Date();
+    this.spawnedAtMs = Date.now();
     this.stopping = false;
 
     this.captureOutput(child);
 
-    const startedAt = Date.now();
     child.once("error", (error) => {
       if (this.child !== child) return;
       this.child = null;
@@ -281,7 +287,7 @@ export class SidecarManager {
       // A crash inside the startup window is a configuration problem (bad binary,
       // bad flags), which is worth distinguishing from a long-running process that
       // later died.
-      const early = Date.now() - startedAt < STARTUP_WINDOW_MS;
+      const early = Date.now() - this.spawnedAtMs < STARTUP_WINDOW_MS;
       this.state = "failed";
       this.lastError = early
         ? `exited immediately (${describeExit(code, signal)}) — check the command and arguments`

@@ -382,70 +382,38 @@ export async function collectSidecarChecks(
   // purpose, so an unconfigured sidecar is the normal state, not a problem.
   if (!status.configured) return [];
 
-  const label = "AI gateway sidecar";
+  const check = (level: DiagnosticCheck["status"], detail: string): DiagnosticCheck[] => [
+    {
+      key: "sidecar:process",
+      label: "AI gateway sidecar",
+      status: level,
+      detail,
+      // Anything short of healthy is fixed in Settings; a healthy check needs no
+      // call to action.
+      ...(level === "ok" ? {} : { action: { label: "Open Settings", target: "settings" } as const }),
+    },
+  ];
 
-  if (status.state === "failed") {
-    return [
-      {
-        key: "sidecar:process",
-        label,
-        status: "fail",
-        detail: status.error ?? "The sidecar failed to start.",
-        action: { label: "Open Settings", target: "settings" },
-      },
-    ];
-  }
-
-  if (status.state !== "running" || !status.baseUrl) {
-    return [
-      {
-        key: "sidecar:process",
-        label,
-        status: "warn",
-        detail: "Configured but not running.",
-        action: { label: "Open Settings", target: "settings" },
-      },
-    ];
-  }
+  if (status.state === "failed") return check("fail", status.error ?? "The sidecar failed to start.");
+  if (status.state !== "running" || !status.baseUrl) return check("warn", "Configured but not running.");
 
   const health = await probeHealth(status.baseUrl);
 
+  // The process is alive, so none of these say "start it" — the fix is its flags or
+  // its own configuration.
   if (!health.reachable) {
-    return [
-      {
-        key: "sidecar:process",
-        label,
-        status: "warn",
-        // The process is alive, so this is not "start it" — it is "it is not
-        // serving yet, or it is not serving what we expect".
-        detail: `Process is running (pid ${status.pid}) but ${status.baseUrl}/health did not answer${
-          health.detail ? ` (${health.detail})` : ""
-        }.`,
-        action: { label: "Open Settings", target: "settings" },
-      },
-    ];
+    return check(
+      "warn",
+      `Process is running (pid ${status.pid}) but ${status.baseUrl}/health did not answer${
+        health.detail ? ` (${health.detail})` : ""
+      }.`,
+    );
   }
-
   if (health.statusCode !== undefined && health.statusCode >= 400) {
-    return [
-      {
-        key: "sidecar:process",
-        label,
-        status: "warn",
-        detail: `${status.baseUrl}/health answered ${health.statusCode}. Check the sidecar's own configuration.`,
-        action: { label: "Open Settings", target: "settings" },
-      },
-    ];
+    return check("warn", `${status.baseUrl}/health answered ${health.statusCode}. Check the sidecar's own configuration.`);
   }
 
-  return [
-    {
-      key: "sidecar:process",
-      label,
-      status: "ok",
-      detail: `Healthy on ${status.baseUrl} (pid ${status.pid}).`,
-    },
-  ];
+  return check("ok", `Healthy on ${status.baseUrl} (pid ${status.pid}).`);
 }
 
 async function resolveBinary(command: string): Promise<string | null> {
