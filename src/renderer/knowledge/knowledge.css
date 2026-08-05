@@ -758,6 +758,16 @@
   stroke: #a78bfa;
 }
 
+/*
+ * A local import whose target is missing from the index — usually dropped by the
+ * maxFiles cap. Dashed rather than a new hue: it is a gap in the graph, not
+ * another category of thing, and the dash reads as "incomplete" at a glance.
+ */
+.node-unindexed {
+  stroke: #94a3b8;
+  stroke-dasharray: 3 2;
+}
+
 .knowledge-graph-view text {
   fill: #d4c7fc;
   font-size: 10px;

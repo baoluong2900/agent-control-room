@@ -1,6 +1,6 @@
 export type KnowledgeExportFormat = "markdown" | "json" | "xml";
 
-export type KnowledgeGraphNodeKind = "file" | "symbol" | "category" | "external";
+export type KnowledgeGraphNodeKind = "file" | "symbol" | "category" | "external" | "unindexed";
 
 export type KnowledgeGraphEdgeKind = "contains" | "imports" | "exports" | "belongs-to";
 

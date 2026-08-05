@@ -14,6 +14,7 @@ import type {
   KnowledgeTruncationReport,
 } from "@contracts";
 import type { DesktopDatabase } from "../database/desktop-database";
+import { type AliasResolver, loadAliasResolver } from "./tsconfig-aliases";
 
 type ScanCandidate = {
   absolutePath: string;
@@ -160,7 +161,10 @@ export class KnowledgeService {
     }
 
     truncation.filesIndexed = files.length;
-    const graph = buildCodeGraph(files);
+    // Read once per scan, not per import: the tsconfig chain is filesystem work
+    // and every file in the project resolves against the same alias table.
+    const aliases = await loadAliasResolver(projectPath);
+    const graph = buildCodeGraph(files, aliases);
     truncation.graphNodesDropped = graph.nodesDropped;
     truncation.graphEdgesDropped = graph.edgesDropped;
 
@@ -318,7 +322,10 @@ function categoryStats(files: KnowledgeFileInsight[]): KnowledgeCategoryStat[] {
   return [...map.values()].sort((a, b) => b.files - a.files || a.category.localeCompare(b.category));
 }
 
-function buildCodeGraph(files: KnowledgeFileInsight[]): { graph: KnowledgeCodeGraph; nodesDropped: number; edgesDropped: number } {
+function buildCodeGraph(
+  files: KnowledgeFileInsight[],
+  aliases?: AliasResolver,
+): { graph: KnowledgeCodeGraph; nodesDropped: number; edgesDropped: number } {
   const nodes = new Map<string, KnowledgeGraphNode>();
   const edges = new Map<string, KnowledgeGraphEdge>();
   const filePaths = new Set(files.map((file) => file.path));
@@ -376,8 +383,17 @@ function buildCodeGraph(files: KnowledgeFileInsight[]): { graph: KnowledgeCodeGr
     }
 
     for (const imported of file.imports.slice(0, 24)) {
-      const resolved = resolveImportPath(file.path, imported, filePaths);
-      const targetId = resolved ? fileNodeId(resolved) : externalNodeId(imported);
+      const resolved = resolveImportPath(file.path, imported, filePaths, aliases);
+      // Three outcomes, not two. An unresolved *local* import means the graph is
+      // incomplete (usually the maxFiles cap dropped the target); an unresolved
+      // bare specifier is a real dependency. Collapsing them made the app's own
+      // aliased layers look like npm packages.
+      const unindexedLocal = !resolved && isUnindexedLocalImport(imported, aliases);
+      const targetId = resolved
+        ? fileNodeId(resolved)
+        : unindexedLocal
+          ? unindexedNodeId(imported)
+          : externalNodeId(imported);
       addNode(
         resolved
           ? {
@@ -387,13 +403,21 @@ function buildCodeGraph(files: KnowledgeFileInsight[]): { graph: KnowledgeCodeGr
               group: "local",
               path: resolved,
             }
-          : {
-              id: targetId,
-              label: externalPackageName(imported),
-              kind: "external",
-              group: "external",
-              detail: imported,
-            },
+          : unindexedLocal
+            ? {
+                id: targetId,
+                label: path.posix.basename(imported),
+                kind: "unindexed",
+                group: "local",
+                detail: `${imported} — local file outside the index`,
+              }
+            : {
+                id: targetId,
+                label: externalPackageName(imported),
+                kind: "external",
+                group: "external",
+                detail: imported,
+              },
       );
       addEdge({
         id: `${fileId}->${targetId}:imports:${imported}`,
@@ -401,7 +425,7 @@ function buildCodeGraph(files: KnowledgeFileInsight[]): { graph: KnowledgeCodeGr
         target: targetId,
         kind: "imports",
         label: imported,
-        confidence: resolved ? 0.76 : 0.58,
+        confidence: resolved ? 0.76 : unindexedLocal ? 0.62 : 0.58,
       });
     }
   }
@@ -593,10 +617,42 @@ function collectMatches(
   }
 }
 
-function resolveImportPath(fromPath: string, imported: string, filePaths: Set<string>): string | null {
-  if (!imported.startsWith(".")) return null;
-  const directory = path.posix.dirname(fromPath);
-  const base = path.posix.normalize(path.posix.join(directory, imported));
+function resolveImportPath(
+  fromPath: string,
+  imported: string,
+  filePaths: Set<string>,
+  aliases?: AliasResolver,
+): string | null {
+  if (imported.startsWith(".")) {
+    const directory = path.posix.dirname(fromPath);
+    return probeCandidates(path.posix.normalize(path.posix.join(directory, imported)), filePaths);
+  }
+
+  // Not relative, but not necessarily a package: a tsconfig `paths` alias points
+  // back into the project. Without this the app's own `@contracts` layer was
+  // rendered as a third-party npm node.
+  if (!aliases?.hasAliases) return null;
+  for (const candidate of aliases.candidates(imported)) {
+    const resolved = probeCandidates(candidate, filePaths);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+/**
+ * True when a specifier maps to a project path that simply is not in the index.
+ *
+ * Distinct from "external package" on purpose: a local file dropped by the
+ * `maxFiles` cap is a gap in the graph, not a dependency, and the truncation
+ * report should be able to say which.
+ */
+function isUnindexedLocalImport(imported: string, aliases?: AliasResolver): boolean {
+  if (imported.startsWith(".")) return true;
+  return Boolean(aliases?.hasAliases) && (aliases?.candidates(imported).length ?? 0) > 0;
+}
+
+/** First existing file for a project-relative base path, trying the usual extensions. */
+function probeCandidates(base: string, filePaths: Set<string>): string | null {
   const candidates = [
     base,
     `${base}.ts`,
@@ -805,6 +861,17 @@ function symbolNodeId(relativePath: string, symbol: string): string {
 
 function externalNodeId(imported: string): string {
   return `external:${externalPackageName(imported)}`;
+}
+
+/**
+ * Node id for a local import whose target is not in the index.
+ *
+ * Keyed by the specifier rather than a package name: two different unresolved
+ * local paths are two different gaps, whereas `lodash/get` and `lodash/set` are
+ * one dependency.
+ */
+function unindexedNodeId(imported: string): string {
+  return `unindexed:${imported}`;
 }
 
 function externalPackageName(imported: string): string {
