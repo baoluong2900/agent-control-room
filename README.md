@@ -4,7 +4,7 @@
 > managed control room — agent profiles, workflows, scheduled tasks, a code-knowledge index,
 > and Git inspection. No hosted backend, no telemetry, no account.
 
-[![desktop-build](https://github.com/baoluong2900/agentic-workspace/actions/workflows/desktop-build.yml/badge.svg)](https://github.com/baoluong2900/agentic-workspace/actions/workflows/desktop-build.yml)
+[![desktop-build](https://github.com/baoluong2900/agent-control-room/actions/workflows/desktop-build.yml/badge.svg)](https://github.com/baoluong2900/agent-control-room/actions/workflows/desktop-build.yml)
 ![tests](https://img.shields.io/badge/tests-243%20passing-brightgreen)
 ![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
