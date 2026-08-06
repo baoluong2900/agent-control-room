@@ -6,6 +6,7 @@ import type {
   AgentRunInput,
   AgenticDesktopApi,
   AppIdentityInput,
+  GatewayUsageSettingsInput,
   KnowledgeExportFormat,
   KnowledgeScanInput,
   KnowledgeScanProgress,
@@ -87,6 +88,11 @@ const api: AgenticDesktopApi = {
     reject: (workflowRunId: string, reason?: string) => ipcRenderer.invoke("workflow:reject", workflowRunId, reason),
     exportDefinition: (workflowId: string) => ipcRenderer.invoke("workflow:export", workflowId),
     importDefinition: () => ipcRenderer.invoke("workflow:import"),
+  },
+  gateway: {
+    getUsageSettings: () => ipcRenderer.invoke("gateway:usage-settings"),
+    saveUsageSettings: (input: GatewayUsageSettingsInput) => ipcRenderer.invoke("gateway:save-usage-settings", input),
+    getUsageSnapshot: (days?: number) => ipcRenderer.invoke("gateway:usage-snapshot", days),
   },
   git: {
     diff: (cwd: string) => ipcRenderer.invoke("git:diff", cwd),

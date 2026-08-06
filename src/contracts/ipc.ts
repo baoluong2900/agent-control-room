@@ -13,6 +13,12 @@ import type {
 } from "./agent";
 import type { GitCommitSummary, GitDiffSummary, GitFileDiff, GitOperationResult, ProjectSummary } from "./project";
 import type {
+  GatewayUsageResult,
+  GatewayUsageSettings,
+  GatewayUsageSettingsInput,
+  GatewayUsageSnapshot,
+} from "./gateway";
+import type {
   KnowledgeExportFormat,
   KnowledgeExportResult,
   KnowledgeScanInput,
@@ -124,6 +130,17 @@ export interface AgenticDesktopApi {
     reject: (workflowRunId: string, reason?: string) => Promise<WorkflowRunRecord>;
     exportDefinition: (workflowId: string) => Promise<WorkflowExportResult | null>;
     importDefinition: () => Promise<WorkflowDefinition | null>;
+  };
+  gateway: {
+    /** Current dashboard configuration. Never carries the API key itself. */
+    getUsageSettings: () => Promise<GatewayUsageSettings>;
+    /** Saves the base URL and/or the key; the key goes straight to the secret vault. */
+    saveUsageSettings: (input: GatewayUsageSettingsInput) => Promise<GatewayUsageSettings>;
+    /**
+     * One poll of credit and usage. Resolves to a typed failure instead of
+     * rejecting, so a polling panel needs no try/catch per tick.
+     */
+    getUsageSnapshot: (days?: number) => Promise<GatewayUsageResult<GatewayUsageSnapshot>>;
   };
   git: {
     diff: (cwd: string) => Promise<GitDiffSummary>;

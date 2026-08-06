@@ -34,6 +34,7 @@ import {
   type ProviderCatalogEntry,
 } from "./provider-catalog";
 import "./settings.css";
+import { GatewayUsageSettingsCard } from "./GatewayUsageSettingsCard";
 
 type BannerTone = "success" | "error" | "idle";
 
@@ -505,6 +506,8 @@ export function SettingsModule({ authOnly = false, onIdentityChange }: SettingsM
               </p>
             </div>
           </header>
+
+          <GatewayUsageSettingsCard />
 
           <div className="settings-provider-grid">
             {providerGroups.map(({ entry, items }) => (

@@ -10,6 +10,7 @@ import { SettingsService } from "./settings/settings-service";
 import { KnowledgeService } from "./knowledge/knowledge-service";
 import { TaskAutomationService } from "./tasks/task-automation-service";
 import { SidecarManager, probeSidecarHealth, readSidecarConfig } from "./gateway/sidecar-manager";
+import { GatewayUsageService } from "./gateway/gateway-usage-service";
 import { WebhookCoordinator } from "./workflows/webhook-coordinator";
 import { WorkflowSchedulerService } from "./workflows/workflow-scheduler";
 import { WorkflowService } from "./workflows/workflow-service";
@@ -78,6 +79,9 @@ app.whenReady().then(async () => {
     workflowSchedulerService,
     activeWebContents,
   );
+  // Reads Pool API's /dashboard/* endpoints. Shares the provider vault so the
+  // dashboard key is stored the same encrypted way as every other credential.
+  const gatewayUsageService = new GatewayUsageService(db, providerSecretVault);
   sidecarManager = new SidecarManager({
     // Read on every start so editing the command does not need an app restart.
     readConfig: () => readSidecarConfig(db),
@@ -97,6 +101,7 @@ app.whenReady().then(async () => {
     knowledgeService,
     projectService,
     settingsService,
+    gatewayUsageService,
     sidecarManager,
     taskAutomationService,
     webhookCoordinator,

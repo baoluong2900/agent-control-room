@@ -26,6 +26,24 @@ export type {
   AgentStructuredChat,
 } from "./agent";
 export type {
+  GatewayBalance,
+  GatewayDayUsage,
+  GatewayKeyInfo,
+  GatewayLifetime,
+  GatewayModelUsage,
+  GatewayPricingEntry,
+  GatewayRequestPage,
+  GatewayRequestRecord,
+  GatewayUsageError,
+  GatewayUsageErrorKind,
+  GatewayUsageOverview,
+  GatewayUsageResult,
+  GatewayUsageSettings,
+  GatewayUsageSettingsInput,
+  GatewayUsageSnapshot,
+  GatewayUsageStats,
+} from "./gateway";
+export type {
   GitCommitSummary,
   GitDiffSummary,
   GitFileChange,

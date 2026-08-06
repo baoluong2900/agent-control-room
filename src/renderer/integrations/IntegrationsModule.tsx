@@ -12,6 +12,7 @@ import {
 import type { ProjectSummary, ProviderConnection, SystemDiagnostics } from "@contracts";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { GatewayUsagePanel } from "../gateway/GatewayUsagePanel";
 import { providerCatalog } from "../settings/provider-catalog";
 import { workspaceNavigation, type WorkspaceNavKey } from "../workspace-navigation";
 import "./integrations.css";
@@ -206,6 +207,13 @@ export function IntegrationsModule({ diagnostics, project, onNavigate, onRefresh
         </main>
 
         <aside className="integrations-rail">
+          {/*
+            Mounted here rather than in Overview so the poll only runs while the
+            Integrations module is on screen — navigating away unmounts it and the
+            effect cleanup clears the interval.
+          */}
+          <GatewayUsagePanel onNavigate={onNavigate} />
+
           <section className="integrations-panel">
             <header>
               <div>

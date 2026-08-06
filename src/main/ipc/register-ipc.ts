@@ -4,6 +4,7 @@ import type {
   AgentProfileInput,
   AgentRunInput,
   AppIdentityInput,
+  GatewayUsageSettingsInput,
   ProviderConnectionAuthRequest,
   ProviderConnectionInput,
   KnowledgeExportFormat,
@@ -37,6 +38,7 @@ import type { WebhookCoordinator } from "../workflows/webhook-coordinator";
 import type { WorkflowSchedulerService } from "../workflows/workflow-scheduler";
 import type { WorkflowService } from "../workflows/workflow-service";
 import { type SidecarManager, probeSidecarHealth } from "../gateway/sidecar-manager";
+import type { GatewayUsageService } from "../gateway/gateway-usage-service";
 import { collectDiagnostics } from "./diagnostics";
 
 /**
@@ -57,6 +59,7 @@ export function registerIpcHandlers({
   projectService,
   settingsService,
   taskAutomationService,
+  gatewayUsageService,
   sidecarManager,
   webhookCoordinator,
   workflowSchedulerService,
@@ -68,6 +71,8 @@ export function registerIpcHandlers({
   projectService: ProjectService;
   settingsService: SettingsService;
   taskAutomationService: TaskAutomationService;
+  /** Optional: harnesses run without the Pool API dashboard wiring. */
+  gatewayUsageService?: GatewayUsageService;
   /** Optional: harnesses and tests run without a gateway sidecar. */
   sidecarManager?: SidecarManager;
   webhookCoordinator: WebhookCoordinator;
@@ -170,6 +175,16 @@ export function registerIpcHandlers({
   );
   ipcMain.handle("workflow:export", (_event, workflowId: string) => workflowService.exportDefinition(workflowId));
   ipcMain.handle("workflow:import", () => workflowService.importDefinition());
+
+  // Registered only when the service exists so a harness without it fails loudly
+  // on invoke rather than silently resolving undefined into the panel.
+  if (gatewayUsageService) {
+    ipcMain.handle("gateway:usage-settings", () => gatewayUsageService.getSettings());
+    ipcMain.handle("gateway:save-usage-settings", (_event, input: GatewayUsageSettingsInput) =>
+      gatewayUsageService.saveSettings(input),
+    );
+    ipcMain.handle("gateway:usage-snapshot", (_event, days?: number) => gatewayUsageService.getSnapshot(days));
+  }
 
   ipcMain.handle("git:diff", (_event, cwd: string) => readGitDiff(cwd));
   ipcMain.handle("git:file-diff", (_event, cwd: string, filePath: string, staged?: boolean) =>

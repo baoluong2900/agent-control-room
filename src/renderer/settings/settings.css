@@ -714,3 +714,11 @@
     justify-content: flex-start;
   }
 }
+
+/* Button row for the Pool API gateway card. Matches .settings-hero's action row. */
+.settings-gateway-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}

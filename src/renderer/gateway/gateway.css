@@ -1,0 +1,397 @@
+/*
+ * Credit panel styling.
+ *
+ * Reuses the palette and geometry the integrations/analytics panels already
+ * established — same panel gradient, same 10px radius, same #80749b label grey —
+ * so this reads as another surface of the workspace rather than a bolt-on.
+ */
+
+.gateway-panel {
+  background: linear-gradient(145deg, rgba(17, 22, 43, 0.94), rgba(7, 8, 21, 0.9));
+  border: 1px solid rgba(247, 243, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 18px 40px rgba(7, 8, 21, 0.24), inset 0 1px rgba(247, 243, 255, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+}
+
+.gateway-panel-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.gateway-eyebrow {
+  align-items: center;
+  color: #67e8f9;
+  display: inline-flex;
+  font-size: 10px;
+  gap: 6px;
+  text-transform: uppercase;
+}
+
+.gateway-panel h2 {
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+.gateway-panel-header p {
+  color: #80749b;
+  font-size: 8px;
+  margin: 3px 0 0;
+}
+
+.gateway-link {
+  align-items: center;
+  background: rgba(7, 8, 21, 0.84);
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 8px;
+  color: #e5dcff;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 11px;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.gateway-link:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.gateway-banner {
+  align-items: center;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.gateway-banner strong {
+  display: block;
+  font-size: 11px;
+}
+
+.gateway-banner small {
+  color: #80749b;
+  display: block;
+  font-size: 9px;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.gateway-banner span {
+  flex: 1;
+  min-width: 0;
+}
+
+.gateway-banner.info {
+  color: #bfdbfe;
+}
+
+.gateway-banner.info svg {
+  color: #60a5fa;
+}
+
+.gateway-banner.error {
+  border-color: rgba(244, 63, 94, 0.32);
+  color: #ffd1d8;
+}
+
+.gateway-banner.error svg {
+  color: #fb7185;
+}
+
+.gateway-balance {
+  background: rgba(7, 8, 21, 0.72);
+  border: 1px solid rgba(247, 243, 255, 0.08);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.gateway-balance-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.gateway-balance-head span {
+  align-items: center;
+  color: #afa8c7;
+  display: inline-flex;
+  font-size: 10px;
+  gap: 6px;
+}
+
+.gateway-balance-head strong {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.gateway-meter {
+  background: rgba(247, 243, 255, 0.08);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.gateway-meter > span {
+  border-radius: 999px;
+  display: block;
+  height: 100%;
+  transition: width 240ms ease;
+}
+
+/* Tone is driven by the server's own exhausted flag, not a client-side threshold. */
+.gateway-balance.tone-healthy .gateway-meter > span {
+  background: linear-gradient(90deg, #34d399, #86efac);
+}
+
+.gateway-balance.tone-healthy .gateway-balance-head strong {
+  color: #86efac;
+}
+
+.gateway-balance.tone-low .gateway-meter > span {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.gateway-balance.tone-low .gateway-balance-head strong {
+  color: #fbbf24;
+}
+
+.gateway-balance.tone-low {
+  border-color: rgba(251, 191, 36, 0.32);
+}
+
+.gateway-balance.tone-critical .gateway-meter > span {
+  background: linear-gradient(90deg, #e11d48, #fb7185);
+}
+
+.gateway-balance.tone-critical .gateway-balance-head strong {
+  color: #fb7185;
+}
+
+.gateway-balance.tone-critical {
+  border-color: rgba(244, 63, 94, 0.36);
+}
+
+.gateway-balance-meta {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.gateway-balance-meta span {
+  background: rgba(17, 22, 43, 0.66);
+  border: 1px solid rgba(247, 243, 255, 0.06);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.gateway-balance-meta strong {
+  display: block;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-balance-meta small {
+  color: #80749b;
+  display: block;
+  font-size: 8px;
+  margin-top: 3px;
+}
+
+.gateway-warning {
+  align-items: center;
+  color: #fbbf24;
+  display: flex;
+  font-size: 9px;
+  gap: 6px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.gateway-balance.tone-critical .gateway-warning {
+  color: #fb7185;
+}
+
+.gateway-stat-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.gateway-stat {
+  background: rgba(7, 8, 21, 0.72);
+  border: 1px solid rgba(247, 243, 255, 0.08);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.gateway-stat strong {
+  display: block;
+  font-size: 16px;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-stat small {
+  color: #80749b;
+  display: block;
+  font-size: 8px;
+  margin-top: 5px;
+}
+
+.gateway-stat.tone-blue strong { color: #60a5fa; }
+.gateway-stat.tone-cyan strong { color: #67e8f9; }
+.gateway-stat.tone-purple strong { color: #a78bfa; }
+.gateway-stat.tone-green strong { color: #86efac; }
+
+.gateway-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gateway-section h3 {
+  color: #afa8c7;
+  font-size: 10px;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.gateway-model-list,
+.gateway-request-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gateway-model-row,
+.gateway-request-row {
+  align-items: center;
+  background: rgba(7, 8, 21, 0.72);
+  border: 1px solid rgba(247, 243, 255, 0.06);
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.gateway-model-row > div,
+.gateway-request-row > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.gateway-model-row strong,
+.gateway-request-row strong {
+  display: block;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-model-row small,
+.gateway-request-row small {
+  color: #80749b;
+  display: block;
+  font-size: 9px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-model-cost {
+  color: #e5dcff;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.gateway-request-meta {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.gateway-request-meta strong {
+  display: block;
+  font-size: 11px;
+}
+
+.gateway-request-meta small {
+  color: #80749b;
+  display: block;
+  font-size: 8px;
+  margin-top: 2px;
+}
+
+.gateway-status {
+  border: 1px solid rgba(247, 243, 255, 0.1);
+  border-radius: 999px;
+  font-size: 8px;
+  padding: 3px 7px;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.gateway-status.ok {
+  background: rgba(134, 239, 172, 0.12);
+  border-color: rgba(134, 239, 172, 0.3);
+  color: #86efac;
+}
+
+.gateway-status.warn {
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.32);
+  color: #fbbf24;
+}
+
+.gateway-status.fail {
+  background: rgba(244, 63, 94, 0.12);
+  border-color: rgba(244, 63, 94, 0.32);
+  color: #fb7185;
+}
+
+.gateway-empty {
+  align-items: center;
+  color: #80749b;
+  display: flex;
+  font-size: 10px;
+  gap: 7px;
+  margin: 0;
+  padding: 4px 2px;
+}
+
+@media (max-width: 1200px) {
+  .gateway-balance-meta,
+  .gateway-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .gateway-balance-meta,
+  .gateway-stat-grid {
+    grid-template-columns: 1fr;
+  }
+}
