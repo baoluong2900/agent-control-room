@@ -19,6 +19,7 @@ import type {
 } from "@contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentFace } from "./agents/AgentFace";
+import { AgentRoom } from "./agents/AgentRoom";
 import { AgentsPage } from "./agents/AgentsPage";
 import { resolveModuleSeed, sortAgentCatalog } from "./agents/agent-modules";
 import { Sidebar } from "./components/Sidebar";
@@ -32,6 +33,7 @@ import { SettingsModule } from "./settings/SettingsModule";
 import { TasksModule } from "./tasks/TasksModule";
 import { WorkflowsModule } from "./workflows/WorkflowsModule";
 import { navForOverviewZone, isWorkspaceNavKey, type WorkspaceNavKey } from "./workspace-navigation";
+import { useAgentsStore } from "./stores/agents-store";
 import { useWorkspaceStore } from "./stores/workspace-store";
 
 type Accent = "blue" | "cyan" | "purple" | "amber" | "green" | "orange";
@@ -482,6 +484,11 @@ function OverviewDashboard({
   onSelectZone: (zone: string) => void;
 }) {
   const selectedModule = navForOverviewZone(selectedZone);
+  // Agents-store profiles come from the same source AgentsPage reads, so the
+  // Overview room shows the identical roster/activity instead of a second,
+  // drifting view built from workspace-store's plain run history.
+  const agentProfiles = useAgentsStore((state) => state.profiles);
+  const project = useWorkspaceStore((state) => state.project);
 
   return (
     <>
@@ -508,6 +515,7 @@ function OverviewDashboard({
               </button>
             </div>
           </section>
+          <AgentRoom profiles={agentProfiles} projectPath={project?.path ?? ""} variant="compact" />
           <WorkspaceMap3D
             activeStatus={activeStatus}
             history={history}
@@ -612,10 +620,15 @@ export default function App() {
     }
 
     void loadInitialState();
+    // Load the agent roster/history once here rather than only inside AgentsPage,
+    // so Overview's Agent Room shows the same agents on first paint instead of an
+    // empty feed until the user happens to open the Agents tab.
+    void useAgentsStore.getState().loadAll();
     let unsubscribe = () => {};
     try {
       unsubscribe = window.agentic.events.subscribe((event) => {
         ingestEvent(event);
+        useAgentsStore.getState().ingest(event);
         const nextZone = event.status ? statusToZone[event.status] : null;
         if (nextZone) {
           setSelectedZone(nextZone);

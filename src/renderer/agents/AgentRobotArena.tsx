@@ -11,7 +11,7 @@
 
 import { Grid, Html, RoundedBox } from "@react-three/drei";
 import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
-import { Bot, MessageCircle } from "lucide-react";
+import { Bot, MessageCircle, Play, Square, Terminal } from "lucide-react";
 import type { AgentStatus } from "@contracts";
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
@@ -77,11 +77,20 @@ export function AgentRobotArena({
   selectedProfileId,
   zoom,
   onSelectProfile,
+  onRunProfile,
+  onStopProfile,
+  onOpenTerminal,
+  isRunning,
 }: {
   robots: RobotArenaNode[];
   selectedProfileId: string | null;
   zoom: number;
   onSelectProfile: (profileId: string) => void;
+  /** Optional: when provided the nameplate rail grows Run/Stop/Terminal quick actions. */
+  onRunProfile?: (profileId: string) => void;
+  onStopProfile?: (profileId: string) => void;
+  onOpenTerminal?: (profileId: string) => void;
+  isRunning?: (profileId: string) => boolean;
 }) {
   const count = robots.length;
 
@@ -172,30 +181,67 @@ export function AgentRobotArena({
 
       <div className="robot-nameplate-rail" aria-label="Configured robot modules">
         {robots.map((robot) => (
-          <button
+          <div
             className={`robot-nameplate tone-${robotTone(robot.status)} ${
               selectedProfileId === robot.profileId ? "selected" : ""
             }`}
-            disabled={!robot.profileId}
             key={robot.id}
-            onClick={() => {
-              if (robot.profileId) onSelectProfile(robot.profileId);
-            }}
             style={{ ["--robot-accent" as string]: accentFor(robot) }}
             title={robot.summary}
-            type="button"
           >
-            <span className="robot-nameplate-main">
+            <button
+              className="robot-nameplate-main"
+              disabled={!robot.profileId}
+              onClick={() => {
+                if (robot.profileId) onSelectProfile(robot.profileId);
+              }}
+              type="button"
+            >
               <strong>{robot.name}</strong>
               <small>
                 {robot.moduleLabel} · {robot.mode}
               </small>
-            </span>
+            </button>
             <span className="robot-nameplate-status">
               <MessageCircle size={11} />
               {robot.status === "missing" ? "Missing" : statusLabel[robot.status]}
             </span>
-          </button>
+            {robot.profileId && (onRunProfile || onStopProfile || onOpenTerminal) && (
+              <span className="robot-nameplate-actions">
+                {onRunProfile && !isRunning?.(robot.profileId) && (
+                  <button
+                    aria-label={`Run ${robot.name}`}
+                    onClick={() => onRunProfile(robot.profileId!)}
+                    title="Run now"
+                    type="button"
+                  >
+                    <Play size={12} />
+                  </button>
+                )}
+                {onStopProfile && isRunning?.(robot.profileId) && (
+                  <button
+                    aria-label={`Stop ${robot.name}`}
+                    className="danger"
+                    onClick={() => onStopProfile(robot.profileId!)}
+                    title="Stop"
+                    type="button"
+                  >
+                    <Square size={12} />
+                  </button>
+                )}
+                {onOpenTerminal && (
+                  <button
+                    aria-label={`Open terminal for ${robot.name}`}
+                    onClick={() => onOpenTerminal(robot.profileId!)}
+                    title="Terminal"
+                    type="button"
+                  >
+                    <Terminal size={12} />
+                  </button>
+                )}
+              </span>
+            )}
+          </div>
         ))}
       </div>
 

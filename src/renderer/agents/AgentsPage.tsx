@@ -28,6 +28,7 @@ import { AgentChatPanel } from "./AgentChatPanel";
 import { AgentBuilderModal } from "./AgentBuilderModal";
 import { AgentFace } from "./AgentFace";
 import { AgentRobotArena } from "./AgentRobotArena";
+import { AgentRoom } from "./AgentRoom";
 import { AgentTerminal } from "./AgentTerminal";
 import { moduleTag, resolveModuleSeed, sortAgentCatalog } from "./agent-modules";
 import { statusLabel, statusTone, useAgentsStore } from "../stores/agents-store";
@@ -65,7 +66,6 @@ export function AgentsPage({
   const runtimes = useAgentsStore((state) => state.runtimes);
   const sessions = useAgentsStore((state) => state.sessions);
   const loadAll = useAgentsStore((state) => state.loadAll);
-  const ingest = useAgentsStore((state) => state.ingest);
   const saveProfile = useAgentsStore((state) => state.saveProfile);
   const deleteProfile = useAgentsStore((state) => state.deleteProfile);
   const runProfile = useAgentsStore((state) => state.runProfile);
@@ -85,9 +85,12 @@ export function AgentsPage({
   const [performanceDays, setPerformanceDays] = useState(7);
 
   useEffect(() => {
+    // App() already subscribes globally and forwards every AgentEvent into this
+    // store (see src/renderer/App.tsx), so agents-store stays populated even
+    // before this page mounts. Subscribing a second time here would double-count
+    // every event into `activity`/`chatThreads`. Only (re)hydrate the roster.
     void loadAll();
-    return window.agentic.events.subscribe(ingest);
-  }, [ingest, loadAll]);
+  }, [loadAll]);
 
   const stats = useMemo(() => {
     const activeIds = new Set(sessions.map((session) => session.profileId).filter(Boolean) as string[]);
@@ -265,6 +268,15 @@ export function AgentsPage({
                   selectedProfileId={chatProfileId}
                   zoom={zoom}
                   onSelectProfile={(profileId: string) => setChatProfileId(profileId)}
+                  onRunProfile={(profileId: string) => {
+                    const profile = profiles.find((entry) => entry.id === profileId);
+                    if (profile) void runNow(profile);
+                  }}
+                  onStopProfile={(profileId: string) => {
+                    const session = sessions.find((entry) => entry.profileId === profileId);
+                    if (session) void useAgentsStore.getState().stopRun(session.runId);
+                  }}
+                  onOpenTerminal={(profileId: string) => setTerminalProfileId(profileId)}
                 />
               )}
               {view === "list" && <CliTable catalog={catalog} pings={pings} />}
@@ -318,6 +330,8 @@ export function AgentsPage({
               onOpenTerminal={() => setTerminalProfileId(chatProfile.id)}
             />
           )}
+
+          <AgentRoom profiles={profiles} projectPath={projectPath} />
 
           <section className="all-agents">
             <header>
@@ -487,6 +501,9 @@ function FleetMap({
   catalog,
   history,
   onSelectProfile,
+  onRunProfile,
+  onStopProfile,
+  onOpenTerminal,
   pings,
   profiles,
   runtimes,
@@ -497,6 +514,9 @@ function FleetMap({
   catalog: AgentCliDescriptor[];
   history: ReturnType<typeof useAgentsStore.getState>["history"];
   onSelectProfile: (profileId: string) => void;
+  onRunProfile: (profileId: string) => void;
+  onStopProfile: (profileId: string) => void;
+  onOpenTerminal: (profileId: string) => void;
   pings: PingMap;
   profiles: AgentProfile[];
   runtimes: ReturnType<typeof useAgentsStore.getState>["runtimes"];
@@ -510,6 +530,7 @@ function FleetMap({
     return statusTone[node.status] === "active" || statusTone[node.status] === "busy";
   }).length;
   const readyCount = catalog.filter((entry) => entry.id !== "custom" && pings[entry.id]?.installed).length;
+  const isRunning = (profileId: string) => sessions.some((session) => session.profileId === profileId);
 
   return (
     <div className="agent-map-stage robot-stage" style={{ ["--fleet-zoom" as string]: zoom / 100 }}>
@@ -518,6 +539,10 @@ function FleetMap({
         selectedProfileId={selectedProfileId}
         zoom={zoom}
         onSelectProfile={onSelectProfile}
+        onRunProfile={onRunProfile}
+        onStopProfile={onStopProfile}
+        onOpenTerminal={onOpenTerminal}
+        isRunning={isRunning}
       />
       <section className="agent-fleet-hub robot-summary" aria-label="Agent fleet summary">
         <span className="agent-fleet-hub-icon">
