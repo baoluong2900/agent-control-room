@@ -11,6 +11,7 @@ import { KnowledgeService } from "./knowledge/knowledge-service";
 import { TaskAutomationService } from "./tasks/task-automation-service";
 import { SidecarManager, probeSidecarHealth, readSidecarConfig } from "./gateway/sidecar-manager";
 import { GatewayUsageService } from "./gateway/gateway-usage-service";
+import { GatewayChatService } from "./gateway/gateway-chat-service";
 import { WebhookCoordinator } from "./workflows/webhook-coordinator";
 import { WorkflowSchedulerService } from "./workflows/workflow-scheduler";
 import { WorkflowService } from "./workflows/workflow-service";
@@ -23,6 +24,7 @@ let taskAutomationService: TaskAutomationService | null = null;
 let workflowSchedulerService: WorkflowSchedulerService | null = null;
 let webhookCoordinator: WebhookCoordinator | null = null;
 let sidecarManager: SidecarManager | null = null;
+let gatewayChatService: GatewayChatService | null = null;
 
 /**
  * The schedulers keep ticking after the last window closes (macOS keeps the app
@@ -82,6 +84,9 @@ app.whenReady().then(async () => {
   // Reads Pool API's /dashboard/* endpoints. Shares the provider vault so the
   // dashboard key is stored the same encrypted way as every other credential.
   const gatewayUsageService = new GatewayUsageService(db, providerSecretVault);
+  // The second transport alongside CLI spawning: prompts routed over HTTP to an
+  // OpenAI-compatible gateway the user already configured as a provider connection.
+  gatewayChatService = new GatewayChatService(settingsService, providerSecretVault, activeWebContents);
   sidecarManager = new SidecarManager({
     // Read on every start so editing the command does not need an app restart.
     readConfig: () => readSidecarConfig(db),
@@ -102,6 +107,7 @@ app.whenReady().then(async () => {
     projectService,
     settingsService,
     gatewayUsageService,
+    gatewayChatService,
     sidecarManager,
     taskAutomationService,
     webhookCoordinator,
@@ -170,6 +176,10 @@ app.on("before-quit", () => {
   // Stop accepting deliveries before the database closes: an in-flight webhook run
   // writes to it, which is the same write-after-close trap the process manager hit.
   void webhookCoordinator?.stop();
+  // Aborts in-flight gateway streams. They do not write to the database, but they
+  // do emit at a webContents that is about to be destroyed, and a stream left
+  // running would keep a socket open past the point the app claims to have quit.
+  gatewayChatService?.stopAll();
   // Kills the sidecar's whole tree, so quitting cannot leave a router orphaned on
   // the port it was given.
   void sidecarManager?.stop();

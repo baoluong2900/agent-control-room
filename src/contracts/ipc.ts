@@ -22,6 +22,12 @@ import type {
   ProjectSummary,
 } from "./project";
 import type {
+  GatewayChatEvent,
+  GatewayChatRequest,
+  GatewayChatResult,
+  GatewayChatTarget,
+} from "./gateway-chat";
+import type {
   GatewayUsageResult,
   GatewayUsageSettings,
   GatewayUsageSettingsInput,
@@ -157,6 +163,18 @@ export interface AgenticDesktopApi {
      * rejecting, so a polling panel needs no try/catch per tick.
      */
     getUsageSnapshot: (days?: number) => Promise<GatewayUsageResult<GatewayUsageSnapshot>>;
+    /** Gateway connections a prompt can be routed through. Never carries a credential. */
+    listChatTargets: () => Promise<GatewayChatTarget[]>;
+    /**
+     * Streams one chat completion through a gateway connection.
+     *
+     * The caller supplies `requestId` rather than receiving one, so `cancelChat` can
+     * stop a request whose response has not started arriving yet. Deltas come over
+     * `events.subscribeGatewayChat`; this promise resolves with the final completion.
+     */
+    sendChat: (request: GatewayChatRequest) => Promise<GatewayChatResult>;
+    /** Aborts an in-flight request. False means nothing by that id was running. */
+    cancelChat: (requestId: string) => Promise<boolean>;
   };
   git: {
     diff: (cwd: string) => Promise<GitDiffSummary>;
@@ -192,5 +210,7 @@ export interface AgenticDesktopApi {
     subscribeWorkflow: (callback: (event: WorkflowEvent) => void) => () => void;
     subscribeTask: (callback: (event: TaskEvent) => void) => () => void;
     subscribeKnowledge: (callback: (event: KnowledgeScanProgress) => void) => () => void;
+    /** Streaming deltas and terminal outcome for gateway chat requests. */
+    subscribeGatewayChat: (callback: (event: GatewayChatEvent) => void) => () => void;
   };
 }

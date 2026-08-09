@@ -13,6 +13,7 @@ import type { ProjectSummary, ProviderConnection, SystemDiagnostics } from "@con
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { GatewayUsagePanel } from "../gateway/GatewayUsagePanel";
+import { GatewayChatPanel } from "../gateway/GatewayChatPanel";
 import { StoragePanel } from "../settings/StoragePanel";
 import { providerCatalog } from "../settings/provider-catalog";
 import { workspaceNavigation, type WorkspaceNavKey } from "../workspace-navigation";
@@ -214,6 +215,13 @@ export function IntegrationsModule({ diagnostics, project, onNavigate, onRefresh
             effect cleanup clears the interval.
           */}
           <GatewayUsagePanel onNavigate={onNavigate} />
+
+          {/*
+            Beside the credit meter on purpose: the meter says whether the account
+            has budget, this says whether the endpoint actually serves. Both answer
+            "can I route work through this gateway right now".
+          */}
+          <GatewayChatPanel onNavigate={onNavigate} />
 
           <StoragePanel />
 

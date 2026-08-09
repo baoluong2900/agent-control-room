@@ -112,6 +112,47 @@ test("Grok, OpenCode and codex chat output parsing reaches the actual chat panel
   assert.match(parser, /agent_message/);
 });
 
+test("gateway chat streaming is exposed across all four bridge layers and rendered", async () => {
+  const [contract, preload, register, main, panel, integrations] = await Promise.all([
+    read("src/contracts/ipc.ts"),
+    read("src/preload/preload.ts"),
+    read("src/main/ipc/register-ipc.ts"),
+    read("src/main/main.ts"),
+    read("src/renderer/gateway/GatewayChatPanel.tsx"),
+    read("src/renderer/integrations/IntegrationsModule.tsx"),
+  ]);
+
+  for (const method of ["listChatTargets", "sendChat", "cancelChat"]) {
+    assert.match(contract, new RegExp(`\\b${method}:`), `${method} is missing from AgenticDesktopApi.gateway`);
+    assert.match(preload, new RegExp(`\\b${method}:`), `${method} is missing from the preload bridge`);
+    assert.match(panel, new RegExp(`bridge\\.${method}\\b`), `${method} is never called by the chat panel`);
+  }
+
+  for (const channel of ["gateway:chat-targets", "gateway:chat-send", "gateway:chat-cancel"]) {
+    assert.match(preload, new RegExp(`invoke\\(["']${channel}["']`), `${channel} is missing from preload`);
+    assert.match(register, new RegExp(`handle\\(["']${channel}["']`), `${channel} has no main-process handler`);
+  }
+
+  // Deltas arrive as pushed events, so the listener side of the bridge has to hold
+  // too — without it the reply would only appear once the request finished.
+  assert.match(contract, /subscribeGatewayChat:/);
+  assert.match(preload, /ipcRenderer\.on\("gateway:chat-event"/);
+  assert.match(panel, /subscribeGatewayChat/);
+
+  // The service must actually be constructed and handed to the IPC registrar, or
+  // every channel above is registered against nothing.
+  assert.match(main, /new GatewayChatService\(/);
+  assert.match(main, /gatewayChatService,/);
+  // In-flight streams emit at a webContents that is about to be destroyed.
+  assert.match(main, /gatewayChatService\?\.stopAll\(\)/, "streams must be aborted on the quit path");
+
+  assert.match(integrations, /<GatewayChatPanel/, "the panel must be mounted on a real surface");
+  // The id is minted before the request leaves, which is what makes Stop work during
+  // the wait before the first token.
+  assert.match(panel, /requestIdRef\.current = requestId/);
+  assert.match(panel, /cancelChat\(requestId\)/);
+});
+
 test("the privileged window denies navigation and every Git handler checks the approved project path", async () => {
   const [windowSource, register] = await Promise.all([
     read("src/main/windows/main-window.ts"),

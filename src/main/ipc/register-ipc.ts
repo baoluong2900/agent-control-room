@@ -4,6 +4,7 @@ import type {
   AgentProfileInput,
   AgentRunInput,
   AppIdentityInput,
+  GatewayChatRequest,
   GatewayUsageSettingsInput,
   ProviderConnectionAuthRequest,
   ProviderConnectionInput,
@@ -46,6 +47,7 @@ import type { WorkflowSchedulerService } from "../workflows/workflow-scheduler";
 import type { WorkflowService } from "../workflows/workflow-service";
 import { type SidecarManager, probeSidecarHealth } from "../gateway/sidecar-manager";
 import type { GatewayUsageService } from "../gateway/gateway-usage-service";
+import type { GatewayChatService } from "../gateway/gateway-chat-service";
 import { collectDiagnostics } from "./diagnostics";
 
 /**
@@ -67,6 +69,7 @@ export function registerIpcHandlers({
   settingsService,
   taskAutomationService,
   gatewayUsageService,
+  gatewayChatService,
   sidecarManager,
   webhookCoordinator,
   workflowSchedulerService,
@@ -80,6 +83,8 @@ export function registerIpcHandlers({
   taskAutomationService: TaskAutomationService;
   /** Optional: harnesses run without the Pool API dashboard wiring. */
   gatewayUsageService?: GatewayUsageService;
+  /** Optional: harnesses run without gateway chat routing. */
+  gatewayChatService?: GatewayChatService;
   /** Optional: harnesses and tests run without a gateway sidecar. */
   sidecarManager?: SidecarManager;
   webhookCoordinator: WebhookCoordinator;
@@ -194,6 +199,16 @@ export function registerIpcHandlers({
       gatewayUsageService.saveSettings(input),
     );
     ipcMain.handle("gateway:usage-snapshot", (_event, days?: number) => gatewayUsageService.getSnapshot(days));
+  }
+
+  // Same optionality rule: a harness without chat routing should fail loudly on
+  // invoke rather than resolve undefined into a panel that then renders nothing.
+  if (gatewayChatService) {
+    ipcMain.handle("gateway:chat-targets", () => gatewayChatService.listTargets());
+    ipcMain.handle("gateway:chat-send", (_event, request: GatewayChatRequest) =>
+      gatewayChatService.sendChat(request),
+    );
+    ipcMain.handle("gateway:chat-cancel", (_event, requestId: string) => gatewayChatService.cancel(requestId));
   }
 
   // Renderer-provided paths are untrusted IPC input. Every Git operation — reads

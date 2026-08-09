@@ -6,6 +6,8 @@ import type {
   AgentRunInput,
   AgenticDesktopApi,
   AppIdentityInput,
+  GatewayChatEvent,
+  GatewayChatRequest,
   GatewayUsageSettingsInput,
   KnowledgeExportFormat,
   KnowledgeScanInput,
@@ -95,6 +97,9 @@ const api: AgenticDesktopApi = {
     getUsageSettings: () => ipcRenderer.invoke("gateway:usage-settings"),
     saveUsageSettings: (input: GatewayUsageSettingsInput) => ipcRenderer.invoke("gateway:save-usage-settings", input),
     getUsageSnapshot: (days?: number) => ipcRenderer.invoke("gateway:usage-snapshot", days),
+    listChatTargets: () => ipcRenderer.invoke("gateway:chat-targets"),
+    sendChat: (request: GatewayChatRequest) => ipcRenderer.invoke("gateway:chat-send", request),
+    cancelChat: (requestId: string) => ipcRenderer.invoke("gateway:chat-cancel", requestId),
   },
   git: {
     diff: (cwd: string) => ipcRenderer.invoke("git:diff", cwd),
@@ -142,6 +147,11 @@ const api: AgenticDesktopApi = {
       const listener = (_event: Electron.IpcRendererEvent, payload: KnowledgeScanProgress) => callback(payload);
       ipcRenderer.on("knowledge:progress", listener);
       return () => ipcRenderer.removeListener("knowledge:progress", listener);
+    },
+    subscribeGatewayChat: (callback: (event: GatewayChatEvent) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: GatewayChatEvent) => callback(payload);
+      ipcRenderer.on("gateway:chat-event", listener);
+      return () => ipcRenderer.removeListener("gateway:chat-event", listener);
     },
   },
 };

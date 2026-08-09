@@ -44,6 +44,19 @@ export type {
   GatewayUsageStats,
 } from "./gateway";
 export type {
+  GatewayChatCompletion,
+  GatewayChatError,
+  GatewayChatErrorKind,
+  GatewayChatEvent,
+  GatewayChatEventType,
+  GatewayChatMessage,
+  GatewayChatRequest,
+  GatewayChatResult,
+  GatewayChatRole,
+  GatewayChatTarget,
+  GatewayChatUsage,
+} from "./gateway-chat";
+export type {
   GitBranchSummary,
   GitCommitSummary,
   GitDiffSummary,
