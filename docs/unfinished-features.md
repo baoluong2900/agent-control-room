@@ -439,6 +439,14 @@ Hệ quả: placeholder “Search workspace” có thể bị hiểu là search 
 
 Việc nên làm: đổi placeholder thành “Open workspace area”, hoặc tích hợp project/task/knowledge search.
 
+Cập nhật 2026-08-09: **D3 đã xong.** TopBar giờ tìm cả hai lớp — navigation area và
+source file thật qua `knowledge:search` — và Enter/click mở file đó trong CodeGraph
+(`onOpenSourceFile` → `KnowledgeFocusRequest`, `requestedAt` là thứ cho phép tìm cùng
+một path hai lần vẫn re-focus). Logic thuần (`matchNavigationAreas`,
+`chooseEnterTarget`, `summarizeSourceSearch`) tách sang
+`src/renderer/components/topbar-search.ts` để test được không cần render.
+Test: `tests/topbar-search.test.ts`.
+
 Cập nhật 2026-08-06: D3 **vẫn đúng** — TopBar chưa đổi, nó vẫn chỉ filter
 `workspaceNavigation`. Nhưng building block đã có: `knowledge:search`
 (`src/main/knowledge/knowledge-search.ts`) là ranked search thật trên snapshot, có
