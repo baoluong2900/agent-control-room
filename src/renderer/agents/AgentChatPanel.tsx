@@ -1,7 +1,8 @@
 import { Bot, CornerDownLeft, Loader2, Radio, Square, Terminal, X } from "lucide-react";
-import type { AgentProfile, AgentStatus } from "@contracts";
+import type { AgentProfile } from "@contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { resolveModuleSeed } from "./agent-modules";
+import { chatRunIsLive, chatSendDisabled } from "./chat-session-state";
 import { buildChatMessages } from "./chat-transcript";
 import { statusLabel, type TerminalChunk, useAgentsStore } from "../stores/agents-store";
 
@@ -36,7 +37,7 @@ export function AgentChatPanel({
   const runtime = useAgentsStore((state) => state.runtimes[profile.id]);
   const conversationId = useAgentsStore((state) => state.chatConversationIds[profile.id]);
   const sessions = useAgentsStore((state) => state.sessions);
-  const clearTerminal = useAgentsStore((state) => state.clearTerminal);
+  const clearChatThread = useAgentsStore((state) => state.clearChatThread);
   const runProfile = useAgentsStore((state) => state.runProfile);
   const sendInput = useAgentsStore((state) => state.sendInput);
   const stopRun = useAgentsStore((state) => state.stopRun);
@@ -47,7 +48,7 @@ export function AgentChatPanel({
   const thread = useAgentsStore((state) => state.chatThreads[profile.id]);
   const module = resolveModuleSeed({ moduleId: profile.module, tags: profile.tags, cliId: profile.cliId });
   const session = useMemo(() => sessions.find((entry) => entry.runId === runId), [runId, sessions]);
-  const live = Boolean(session) || runStatusIsLive(runtime?.status);
+  const live = chatRunIsLive({ hasSession: Boolean(session), status: runtime?.status });
   const messages = useMemo(() => {
     const source = profile.cliId === "shell" ? chunks : thread ?? chunks;
     return buildChatMessages(source, supportsStructuredChat).slice(-80);
@@ -133,7 +134,11 @@ export function AgentChatPanel({
             <Terminal size={13} />
             Terminal
           </button>
-          <button className="ghost-button" onClick={() => runId && clearTerminal(runId)} disabled={!runId}>
+          <button
+            className="ghost-button"
+            onClick={() => clearChatThread(profile.id)}
+            disabled={messages.length === 0}
+          >
             Clear
           </button>
           <button className="ghost-button" onClick={() => runId && stopRun(runId)} disabled={!live}>
@@ -203,7 +208,13 @@ export function AgentChatPanel({
         />
         <button
           className="primary-action agent-chat-send"
-          disabled={busy || !cwd || (supportsStructuredChat ? live || !draft.trim() : live && !draft.trim())}
+          disabled={chatSendDisabled({
+            busy,
+            hasCwd: Boolean(cwd),
+            live,
+            draft,
+            structured: supportsStructuredChat,
+          })}
           onClick={send}
         >
           {busy ? <Loader2 className="spin" size={14} /> : <CornerDownLeft size={14} />}
@@ -219,8 +230,4 @@ function fallbackPrompt(profile: AgentProfile, defaultPrompt: string): string {
     return `echo "${profile.name} chat session ready"`;
   }
   return profile.systemPrompt || defaultPrompt || "Start a concise interactive agent session.";
-}
-
-function runStatusIsLive(status?: AgentStatus): boolean {
-  return status !== "completed" && status !== "failed" && status !== "stopped";
 }

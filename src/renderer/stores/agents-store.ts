@@ -69,6 +69,8 @@ type AgentsState = {
   setActiveRunId: (runId: string | null) => void;
   hydrateTerminal: (runId: string) => Promise<void>;
   clearTerminal: (runId: string) => void;
+  /** Clears one profile's chat transcript. See the store implementation. */
+  clearChatThread: (profileId: string) => void;
   ingest: (event: AgentEvent) => void;
   setError: (error: string | null) => void;
 };
@@ -321,6 +323,26 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
 
   clearTerminal(runId) {
     set((state) => ({ terminals: { ...state.terminals, [runId]: [] } }));
+  },
+
+  /**
+   * Clears the chat transcript for one profile.
+   *
+   * Chat bubbles are read from `chatThreads[profileId]`, which is keyed by
+   * *profile* so a thread survives across turns — structured chat spawns a fresh
+   * run per message. `clearTerminal(runId)` empties a different, run-keyed map,
+   * so using it as the chat panel's Clear button left every bubble on screen and
+   * only wiped the matching terminal view. Both are cleared together: the chat
+   * panel's Terminal button shows that same run.
+   */
+  clearChatThread(profileId) {
+    set((state) => {
+      const runId = state.runtimes[profileId]?.runId;
+      return {
+        chatThreads: { ...state.chatThreads, [profileId]: [] },
+        terminals: runId ? { ...state.terminals, [runId]: [] } : state.terminals,
+      };
+    });
   },
 
   ingest(event) {
