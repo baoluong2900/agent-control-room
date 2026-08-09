@@ -18,6 +18,8 @@ import type {
   KnowledgeTruncationReport,
   AgentRunRecord,
   AgentStatus,
+  DatabaseMaintenanceResult,
+  DatabaseStorageReport,
   ProjectSummary,
   ProviderConnection,
   ProviderConnectionInput,
@@ -220,7 +222,11 @@ export class DesktopDatabase {
   /** Rows appended per run since its last prune; see `appendTerminalLog`. */
   private readonly logAppendsSincePrune = new Map<string, number>();
 
-  private constructor(private readonly db: SqliteDatabase) {
+  private constructor(
+    private readonly db: SqliteDatabase,
+    /** Absolute path of the sqlite file, so storage reports can name it. */
+    private readonly sqlitePath = "",
+  ) {
     this.workflows = new WorkflowRepository(db);
   }
 
@@ -229,7 +235,7 @@ export class DesktopDatabase {
     const sqlitePath = path.join(userDataPath, "agentic-workspace.sqlite");
     const sqlite = await import("node:sqlite");
     const db = new sqlite.DatabaseSync(sqlitePath) as SqliteDatabase;
-    const database = new DesktopDatabase(db);
+    const database = new DesktopDatabase(db, sqlitePath);
     database.migrate();
     database.reconcileInterruptedAgentRuns();
     database.ensureDefaultIdentity();
@@ -675,6 +681,88 @@ export class DesktopDatabase {
       )
       .run(cutoff) as { changes?: number } | undefined;
     return Number(result?.changes ?? 0);
+  }
+
+  /**
+   * Storage facts for the Settings/Diagnostics panel: where the file is, how big
+   * it is, and how much of it is terminal log rows.
+   */
+  storageReport(): DatabaseStorageReport {
+    const health = this.databaseHealth();
+    return {
+      path: this.sqlitePath,
+      schemaVersion: health.schemaVersion,
+      sizeBytes: health.sizeBytes,
+      terminalLogRows: health.terminalLogRows,
+      retentionDays: logRetention.maxRunAgeDays,
+    };
+  }
+
+  /**
+   * User-triggered maintenance: sweep logs for finished runs older than
+   * `olderThanDays`, then reclaim the freed pages.
+   *
+   * The sweep alone does not shrink the file — sqlite keeps the emptied pages on a
+   * free list and reuses them later — so a user who ran cleanup to recover disk
+   * space would see the reported size not budge. `vacuum` is what actually returns
+   * the space, and it cannot run inside a transaction, hence the two steps.
+   *
+   * Reports both the rows removed and the real byte delta, so the UI states what
+   * happened rather than "done".
+   */
+  runMaintenance(now = new Date()): DatabaseMaintenanceResult {
+    const before = this.databaseHealth();
+    // Manual cleanup enforces the same retention window advertised by the UI and
+    // used at startup. There is deliberately no caller-controlled age: a future
+    // IPC or internal caller cannot accidentally turn "clean expired logs" into
+    // "delete all completed-run history" by passing 0 or a negative value.
+    const days = logRetention.maxRunAgeDays;
+    const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    let removedRows = 0;
+    try {
+      removedRows = this.pruneOldTerminalLogs(cutoff);
+    } catch (error) {
+      return {
+        ok: false,
+        removedRows: 0,
+        bytesBefore: before.sizeBytes,
+        bytesAfter: before.sizeBytes,
+        bytesReclaimed: 0,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    try {
+      this.db.exec("vacuum");
+    } catch (error) {
+      // The rows are gone even if the file did not shrink; report that honestly
+      // rather than claiming a failure that lost no data.
+      const after = this.databaseHealth();
+      return {
+        ok: true,
+        removedRows,
+        bytesBefore: before.sizeBytes,
+        bytesAfter: after.sizeBytes,
+        bytesReclaimed: Math.max(0, before.sizeBytes - after.sizeBytes),
+        message: `Removed ${removedRows} log rows, but could not reclaim space: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+
+    const after = this.databaseHealth();
+    const reclaimed = Math.max(0, before.sizeBytes - after.sizeBytes);
+    return {
+      ok: true,
+      removedRows,
+      bytesBefore: before.sizeBytes,
+      bytesAfter: after.sizeBytes,
+      bytesReclaimed: reclaimed,
+      message: removedRows
+        ? `Removed ${removedRows.toLocaleString()} log rows from runs older than ${days} days.`
+        : `No logs older than ${days} days; reclaimed free pages only.`,
+    };
   }
 
   /** Row count for a run's logs; used by retention tests and diagnostics. */

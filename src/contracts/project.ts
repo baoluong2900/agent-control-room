@@ -54,3 +54,35 @@ export interface GitOperationResult {
   summary?: GitDiffSummary;
   commit?: GitCommitSummary;
 }
+
+export interface GitBranchSummary {
+  name: string;
+  /** True for the branch currently checked out. */
+  current: boolean;
+  /** Upstream tracking ref, when the branch has one (`origin/main`). */
+  upstream?: string;
+  /** Subject of the branch tip, for disambiguating similar branch names. */
+  subject?: string;
+}
+
+export interface GitStashEntry {
+  /** Stack reference (`stash@{0}`). Positional: it shifts as entries are added. */
+  ref: string;
+  /** Index in the stack, so the UI never has to parse `ref`. */
+  index: number;
+  message: string;
+  /** Branch the stash was taken on. */
+  branch?: string;
+  date: string;
+}
+
+/**
+ * What a stash entry would restore. `git stash apply` is not reversible by any
+ * single git command, so the UI shows this before asking for confirmation.
+ */
+export interface GitStashDetail {
+  ref: string;
+  patch: string;
+  files: string[];
+  error?: string;
+}

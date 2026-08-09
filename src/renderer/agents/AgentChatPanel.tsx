@@ -2,6 +2,7 @@ import { Bot, CornerDownLeft, Loader2, Radio, Square, Terminal, X } from "lucide
 import type { AgentProfile, AgentStatus } from "@contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { resolveModuleSeed } from "./agent-modules";
+import { extractStructuredAssistantText } from "./structured-chat-output";
 import { statusLabel, type TerminalChunk, useAgentsStore } from "../stores/agents-store";
 
 type ChatMessage = {
@@ -295,45 +296,6 @@ function shortTime(timestamp: string): string {
 
 function stripAnsi(value: string): string {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
-function extractStructuredAssistantText(payload: string): string | null {
-  try {
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
-    return firstStructuredText(parsed);
-  } catch {
-    return null;
-  }
-}
-
-function firstStructuredText(value: unknown): string | null {
-  if (!value) return null;
-  if (typeof value === "string") return value.trim() || null;
-  if (Array.isArray(value)) {
-    const joined = value.map((entry) => firstStructuredText(entry)).filter(Boolean).join("\n\n");
-    return joined.trim() || null;
-  }
-  if (typeof value !== "object") return null;
-
-  const record = value as Record<string, unknown>;
-  // `response` is agy's field; `result` is claude's. Both come first so a
-  // wrapper envelope's own `message`/`content` never shadows the real answer.
-  const direct = [record.response, record.result, record.message, record.content, record.text, record.summary]
-    .map((entry) => firstStructuredText(entry))
-    .find((entry): entry is string => Boolean(entry));
-  if (direct) return direct;
-
-  // Agy format: { "type": "text", "text": "..." }
-  if (record.type === "text" && typeof record.text === "string") {
-    return record.text.trim() || null;
-  }
-
-  // Agy/OpenAI format: { "role": "assistant", "content": "..." }
-  if (record.role === "assistant" && typeof record.content === "string") {
-    return record.content.trim() || null;
-  }
-
-  return null;
 }
 
 function splitParagraphs(value: string): string[] {

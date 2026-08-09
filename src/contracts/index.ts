@@ -44,12 +44,15 @@ export type {
   GatewayUsageStats,
 } from "./gateway";
 export type {
+  GitBranchSummary,
   GitCommitSummary,
   GitDiffSummary,
   GitFileChange,
   GitFileChangeKind,
   GitFileDiff,
   GitOperationResult,
+  GitStashDetail,
+  GitStashEntry,
   ProjectSummary,
 } from "./project";
 export type {
@@ -90,6 +93,8 @@ export type {
 } from "./settings";
 export type {
   CliDiagnostic,
+  DatabaseMaintenanceResult,
+  DatabaseStorageReport,
   DiagnosticAction,
   DiagnosticCheck,
   DiagnosticStatus,

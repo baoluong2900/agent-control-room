@@ -224,6 +224,18 @@ const catalog: AgentCliDescriptor[] = [
     supportsStdin: true,
     autoApproveArgs: ["--always-approve"],
     systemPromptFlag: "--rules",
+    structuredChat: {
+      // Verified live: `grok --output-format json --single "…"` prints one JSON
+      // object with `text` and `sessionId`, and `--resume <id>` recalled a
+      // codeword set on the previous turn (same sessionId, so it is one thread).
+      // `--single` takes the prompt as its value, hence promptFlag — a bare
+      // positional would start an interactive TUI that never exits.
+      args: ["--output-format", "json", "--single"],
+      promptFlag: "--single",
+      resumeFlag: "--resume",
+      conversationIdFields: ["sessionId"],
+      outputFormat: "json",
+    },
     // Verified against `grok --help`.
     options: [
       {
@@ -379,6 +391,13 @@ const catalog: AgentCliDescriptor[] = [
     supportsInteractive: true,
     supportsStdin: true,
     autoApproveArgs: ["--dangerously-bypass-approvals-and-sandbox"],
+    // No `structuredChat` block on purpose. `codex exec --json` does emit JSONL,
+    // but resuming is a *subcommand* — `codex exec resume <SESSION_ID> <PROMPT>`
+    // — not a flag, so it does not fit `resumeFlag`, which appends `<flag> <id>`
+    // after the args. Supporting it needs a resume *argv template* in the
+    // capability, and that could not be verified here: this machine's codex
+    // login returns "access token could not be refreshed", so any entry would be
+    // a guess. Chat stays hidden for codex until both are true.
     // Verified against `codex exec --help`.
     options: [
       {
@@ -507,6 +526,19 @@ const catalog: AgentCliDescriptor[] = [
     promptMode: "arg",
     supportsInteractive: true,
     supportsStdin: true,
+    structuredChat: {
+      // Verified live: `opencode run --format json "…"` emits JSONL — one object
+      // per event — where the answer is the `text` event's `part.text` and every
+      // line carries `sessionID`. `--session <id>` recalled a codeword from the
+      // previous turn under that same id.
+      //
+      // `run` must be repeated here: `args` replaces `baseArgs` for a chat run,
+      // so omitting it would invoke bare `opencode` and open the TUI.
+      args: ["run", "--format", "json"],
+      resumeFlag: "--session",
+      conversationIdFields: ["sessionID"],
+      outputFormat: "jsonl",
+    },
     models: [
       { id: "anthropic/claude-sonnet-4-5", label: "anthropic/claude-sonnet-4-5", recommended: true },
       { id: "openai/gpt-5", label: "openai/gpt-5" },

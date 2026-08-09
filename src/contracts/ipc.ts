@@ -11,7 +11,16 @@ import type {
   AgentRunRecord,
   AgentSessionSummary,
 } from "./agent";
-import type { GitCommitSummary, GitDiffSummary, GitFileDiff, GitOperationResult, ProjectSummary } from "./project";
+import type {
+  GitBranchSummary,
+  GitCommitSummary,
+  GitDiffSummary,
+  GitFileDiff,
+  GitOperationResult,
+  GitStashDetail,
+  GitStashEntry,
+  ProjectSummary,
+} from "./project";
 import type {
   GatewayUsageResult,
   GatewayUsageSettings,
@@ -36,7 +45,7 @@ import type {
   ProviderConnectionInput,
   ProviderConnectionVerifyResult,
 } from "./settings";
-import type { SystemDiagnostics } from "./system";
+import type { DatabaseMaintenanceResult, DatabaseStorageReport, SystemDiagnostics } from "./system";
 import type {
   TaskEvent,
   TaskPlanInput,
@@ -62,6 +71,13 @@ import type {
 export interface AgenticDesktopApi {
   system: {
     diagnostics: (projectPath?: string | null) => Promise<SystemDiagnostics>;
+    /** Size, location and log-row count of the local sqlite store. */
+    storage: () => Promise<DatabaseStorageReport>;
+    /**
+     * Drops terminal logs for finished runs outside the fixed retention window,
+     * then reclaims the freed pages. Reports the real byte delta.
+     */
+    cleanupStorage: () => Promise<DatabaseMaintenanceResult>;
   };
   projects: {
     selectFolder: () => Promise<ProjectSummary | null>;
@@ -149,6 +165,21 @@ export interface AgenticDesktopApi {
     stage: (cwd: string, path: string) => Promise<GitOperationResult>;
     unstage: (cwd: string, path: string) => Promise<GitOperationResult>;
     commit: (cwd: string, message: string) => Promise<GitOperationResult>;
+    /** Local branches, current one first. */
+    branches: (cwd: string) => Promise<GitBranchSummary[]>;
+    /** Switches branches, or creates one from HEAD when `create` is set. */
+    checkout: (cwd: string, name: string, create?: boolean) => Promise<GitOperationResult>;
+    stashes: (cwd: string) => Promise<GitStashEntry[]>;
+    /** The patch one stash would restore, for review before applying it. */
+    stashDetail: (cwd: string, ref: string) => Promise<GitStashDetail>;
+    stashPush: (cwd: string, message?: string, includeUntracked?: boolean) => Promise<GitOperationResult>;
+    /** `keep: true` applies and leaves the entry; false pops it. */
+    stashApply: (cwd: string, ref: string, keep?: boolean) => Promise<GitOperationResult>;
+    /**
+     * Drops a stash. `expectedMessage` guards against the stack shifting between
+     * render and click — a mismatch refuses instead of deleting another entry.
+     */
+    stashDrop: (cwd: string, ref: string, expectedMessage?: string) => Promise<GitOperationResult>;
   };
   knowledge: {
     get: (projectPath: string) => Promise<KnowledgeSnapshot | null>;

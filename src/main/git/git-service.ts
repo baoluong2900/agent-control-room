@@ -2,12 +2,15 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
+  GitBranchSummary,
   GitCommitSummary,
   GitDiffSummary,
   GitFileChange,
   GitFileChangeKind,
   GitFileDiff,
   GitOperationResult,
+  GitStashDetail,
+  GitStashEntry,
 } from "@contracts";
 
 type GitResult = {
@@ -126,6 +129,260 @@ export async function commitGitChanges(cwd: string, message: string): Promise<Gi
 
   const [commit] = await readGitLog(cwd, 1);
   return operationResult(true, result.output.trim() || `Committed ${commit?.shortHash ?? "changes"}`, cwd, commit);
+}
+
+/**
+ * Local branches, current one first.
+ *
+ * `for-each-ref` rather than `branch --list`: the latter formats for humans (a
+ * `*` prefix, colour codes, an aligned column) and would have to be un-formatted
+ * again, while for-each-ref emits exactly the fields asked for, separated by a
+ * byte that cannot occur in a ref name.
+ */
+export async function readGitBranches(cwd: string): Promise<GitBranchSummary[]> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return [];
+
+  const result = await git(cwd, [
+    "for-each-ref",
+    "--sort=-committerdate",
+    "--format=%(refname:short)%1f%(HEAD)%1f%(upstream:short)%1f%(contents:subject)",
+    "refs/heads",
+  ]);
+  if (!result.ok || !result.output.trim()) return [];
+
+  const branches = result.output
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line) => {
+      const [name, head, upstream, ...subject] = line.split("\x1f");
+      return {
+        name: name.trim(),
+        current: head.trim() === "*",
+        upstream: upstream?.trim() || undefined,
+        subject: subject.join("\x1f").trim() || undefined,
+      };
+    })
+    .filter((branch) => branch.name);
+
+  // Current branch first: it is the one the user reasons about, and sorting by
+  // commit date alone can bury it under branches touched more recently.
+  return [...branches.filter((branch) => branch.current), ...branches.filter((branch) => !branch.current)];
+}
+
+/**
+ * Checks out an existing local branch, or creates one from HEAD.
+ *
+ * Refuses while the work tree is dirty. Git itself would carry the changes across
+ * when they do not conflict and fail with a wall of text when they do; refusing
+ * outright is the predictable behaviour, and the alternative silently spreads
+ * half-finished work onto another branch.
+ */
+export async function checkoutGitBranch(cwd: string, name: string, create = false): Promise<GitOperationResult> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return operationResult(false, repository.output, cwd);
+
+  const safeName = sanitizeBranchName(name);
+  if (!safeName) return operationResult(false, "Invalid branch name", cwd);
+
+  const existing = await readGitBranches(cwd);
+  if (create && existing.some((branch) => branch.name === safeName)) {
+    return operationResult(false, `Branch ${safeName} already exists`, cwd);
+  }
+  if (!create && !existing.some((branch) => branch.name === safeName)) {
+    return operationResult(false, `Branch ${safeName} does not exist locally`, cwd);
+  }
+  if (existing.some((branch) => branch.current && branch.name === safeName)) {
+    return operationResult(true, `Already on ${safeName}`, cwd);
+  }
+
+  const dirty = await hasUncommittedChanges(cwd);
+  if (dirty) {
+    return operationResult(
+      false,
+      "Uncommitted changes would be carried onto the other branch. Commit or stash them first.",
+      cwd,
+    );
+  }
+
+  const args = create ? ["switch", "--create", safeName] : ["switch", safeName];
+  const result = await git(cwd, args);
+  return operationResult(
+    result.ok,
+    result.ok ? (create ? `Created and switched to ${safeName}` : `Switched to ${safeName}`) : result.output || "Checkout failed",
+    cwd,
+  );
+}
+
+export async function readGitStashes(cwd: string): Promise<GitStashEntry[]> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return [];
+
+  const result = await git(cwd, ["stash", "list", "--format=%gd%x1f%gs%x1f%ai"]);
+  if (!result.ok || !result.output.trim()) return [];
+
+  return result.output
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line, index) => {
+      const [ref, subject, date] = line.split("\x1f");
+      // `%gs` reads `WIP on main: 1a2b3c subject` or `On main: message`; the
+      // branch is worth its own field because it is how a user decides whether a
+      // stash is even relevant to where they are now.
+      const branchMatch = /^(?:WIP on|On) ([^:]+):/.exec(subject ?? "");
+      return {
+        ref: ref?.trim() || `stash@{${index}}`,
+        index,
+        message: (subject ?? "").trim(),
+        branch: branchMatch?.[1]?.trim(),
+        date: (date ?? "").trim(),
+      };
+    });
+}
+
+/** The patch a stash would restore, so the UI can show it before applying. */
+export async function readGitStashDetail(cwd: string, ref: string): Promise<GitStashDetail> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return { ref, patch: "", files: [], error: repository.output };
+
+  const resolved = await resolveStashRef(cwd, ref);
+  if (!resolved) return { ref, patch: "", files: [], error: "Unknown stash entry" };
+
+  const [patch, files] = await Promise.all([
+    // Include untracked entries too: a stash created with `--include-untracked`
+    // must preview every file it would restore, not only its tracked half.
+    git(cwd, ["stash", "show", "--include-untracked", "--patch", resolved]),
+    git(cwd, ["stash", "show", "--include-untracked", "--name-only", resolved]),
+  ]);
+
+  return {
+    ref: resolved,
+    patch: patch.ok ? patch.output : "",
+    files: files.ok ? files.output.split(/\r?\n/).filter((line) => line.trim()) : [],
+    error: patch.ok ? undefined : patch.output || "Unable to read stash",
+  };
+}
+
+/** Stashes tracked changes, and untracked files when asked. */
+export async function createGitStash(
+  cwd: string,
+  message?: string,
+  includeUntracked = false,
+): Promise<GitOperationResult> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return operationResult(false, repository.output, cwd);
+
+  // `git stash push` on a clean tree is a no-op that still exits 0, which would
+  // report success for a stash that does not exist.
+  const summary = await readGitDiff(cwd);
+  const stashable = includeUntracked
+    ? summary.files.length
+    : summary.files.filter((file) => file.kind !== "untracked").length;
+  if (!stashable) {
+    return operationResult(
+      false,
+      includeUntracked ? "Nothing to stash" : "Nothing to stash (untracked files need Include untracked)",
+      cwd,
+    );
+  }
+
+  const args = ["stash", "push"];
+  if (includeUntracked) args.push("--include-untracked");
+  const trimmed = message?.trim();
+  if (trimmed) args.push("--message", trimmed);
+
+  const result = await git(cwd, args);
+  return operationResult(result.ok, result.ok ? result.output.trim() || "Changes stashed" : result.output || "Stash failed", cwd);
+}
+
+/**
+ * Restores a stash. `keep` decides between `apply` (entry stays) and `pop`
+ * (entry is consumed).
+ *
+ * Refuses on a dirty tree: restoring over local edits either conflicts, or
+ * silently mixes two sets of changes into one indistinguishable diff.
+ */
+export async function applyGitStash(cwd: string, ref: string, keep = true): Promise<GitOperationResult> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return operationResult(false, repository.output, cwd);
+
+  const resolved = await resolveStashRef(cwd, ref);
+  if (!resolved) return operationResult(false, "Unknown stash entry", cwd);
+
+  // A stash can contain untracked files too. Restoring it over an untracked file
+  // with the same path either fails late or risks mixing two unrelated work sets,
+  // so stash restore requires a *fully* clean tree, unlike branch switching where
+  // Git safely carries untracked files across.
+  const current = await readGitDiff(cwd);
+  if (current.files.length > 0) {
+    return operationResult(false, "Restore onto a clean tree: commit or stash the current changes first.", cwd);
+  }
+
+  const result = await git(cwd, ["stash", keep ? "apply" : "pop", resolved]);
+  return operationResult(
+    result.ok,
+    result.ok
+      ? `${keep ? "Applied" : "Popped"} ${resolved}`
+      : result.output || `Unable to ${keep ? "apply" : "pop"} ${resolved}`,
+    cwd,
+  );
+}
+
+/**
+ * Drops one stash entry. Irreversible in practice, so the caller must pass the
+ * message it showed the user; a mismatch means the stack shifted underneath and
+ * the drop is refused rather than deleting a different entry.
+ */
+export async function dropGitStash(cwd: string, ref: string, expectedMessage?: string): Promise<GitOperationResult> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return operationResult(false, repository.output, cwd);
+
+  const entries = await readGitStashes(cwd);
+  const entry = entries.find((candidate) => candidate.ref === ref);
+  if (!entry) return operationResult(false, "Unknown stash entry", cwd);
+  if (expectedMessage !== undefined && entry.message !== expectedMessage) {
+    return operationResult(
+      false,
+      `${ref} now holds "${entry.message}". Refresh before dropping — the stash stack shifted.`,
+      cwd,
+    );
+  }
+
+  const result = await git(cwd, ["stash", "drop", ref]);
+  return operationResult(result.ok, result.ok ? `Dropped ${ref}` : result.output || `Unable to drop ${ref}`, cwd);
+}
+
+/**
+ * True when the work tree or index carries changes that a checkout or stash
+ * restore could disturb. Untracked files are excluded: git carries them across a
+ * branch switch untouched, so blocking on them would refuse safe operations.
+ */
+async function hasUncommittedChanges(cwd: string): Promise<boolean> {
+  const summary = await readGitDiff(cwd);
+  return summary.files.some((file) => file.kind !== "untracked");
+}
+
+/** Confirms a `stash@{n}` ref exists right now, rather than trusting the caller. */
+async function resolveStashRef(cwd: string, ref: string): Promise<string | null> {
+  const trimmed = ref.trim();
+  if (!/^stash@\{\d+\}$/.test(trimmed)) return null;
+  const entries = await readGitStashes(cwd);
+  return entries.some((entry) => entry.ref === trimmed) ? trimmed : null;
+}
+
+/**
+ * Rejects anything git would reject, plus leading dashes — a name like `-f`
+ * would otherwise be read by git as a flag rather than a branch.
+ */
+function sanitizeBranchName(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length > 200) return null;
+  if (trimmed.startsWith("-") || trimmed.startsWith("/") || trimmed.endsWith("/")) return null;
+  if (trimmed.endsWith(".") || trimmed.endsWith(".lock")) return null;
+  if (trimmed.includes("..") || trimmed.includes("@{")) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\s~^:?*[\\\x00-\x1f\x7f]/.test(trimmed)) return null;
+  return trimmed;
 }
 
 function emptySummary(cwd: string, status: string, isRepository: boolean): GitDiffSummary {

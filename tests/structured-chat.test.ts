@@ -9,7 +9,7 @@ import {
 } from "../src/main/agents/commands.ts";
 import { extractConversationId } from "../src/main/processes/agent-process-manager.ts";
 
-test("claude and agy declare their chat capability in the catalog, not in the argv builder", () => {
+test("chat-capable CLIs declare their capability in the catalog, not in the argv builder", () => {
   assert.deepEqual(getAgentDescriptor("claude").structuredChat, {
     args: ["-p", "--output-format", "json"],
     resumeFlag: "--resume",
@@ -20,11 +20,26 @@ test("claude and agy declare their chat capability in the catalog, not in the ar
     resumeFlag: "--conversation",
     conversationIdFields: ["conversation_id"],
   });
+  assert.deepEqual(getAgentDescriptor("grok").structuredChat, {
+    args: ["--output-format", "json", "--single"],
+    promptFlag: "--single",
+    resumeFlag: "--resume",
+    conversationIdFields: ["sessionId"],
+    outputFormat: "json",
+  });
+  assert.deepEqual(getAgentDescriptor("opencode").structuredChat, {
+    args: ["run", "--format", "json"],
+    resumeFlag: "--session",
+    conversationIdFields: ["sessionID"],
+    outputFormat: "jsonl",
+  });
 });
 
 test("usesStructuredChat follows the capability and the ui mode together", () => {
   assert.equal(usesStructuredChat({ cliId: "claude", uiMode: "chat" }), true);
   assert.equal(usesStructuredChat({ cliId: "agy", uiMode: "chat" }), true);
+  assert.equal(usesStructuredChat({ cliId: "grok", uiMode: "chat" }), true);
+  assert.equal(usesStructuredChat({ cliId: "opencode", uiMode: "chat" }), true);
 
   // Right CLI, wrong mode.
   assert.equal(usesStructuredChat({ cliId: "claude", uiMode: "terminal" }), false);
@@ -40,12 +55,20 @@ test("structuredChatFor tolerates a CLI with no descriptor", () => {
   assert.ok(structuredChatFor("claude"));
 });
 
-test("only the chat-capable CLIs carry the capability", () => {
+test("only verified chat-capable CLIs carry the capability", () => {
   const capable = listAgentCatalog()
     .filter((entry) => entry.structuredChat)
     .map((entry) => entry.id)
     .sort();
-  assert.deepEqual(capable, ["agy", "claude"]);
+  assert.deepEqual(capable, ["agy", "claude", "grok", "opencode"]);
+
+  for (const unverified of ["codex", "gemini", "kiro", "amazonq"] as const) {
+    assert.equal(
+      getAgentDescriptor(unverified).structuredChat,
+      undefined,
+      `${unverified} must stay terminal-only until its output and resume semantics are verified`,
+    );
+  }
 });
 
 test("the catalog stays serialisable across the contextBridge", () => {

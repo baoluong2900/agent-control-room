@@ -13,6 +13,7 @@ import type { ProjectSummary, ProviderConnection, SystemDiagnostics } from "@con
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { GatewayUsagePanel } from "../gateway/GatewayUsagePanel";
+import { StoragePanel } from "../settings/StoragePanel";
 import { providerCatalog } from "../settings/provider-catalog";
 import { workspaceNavigation, type WorkspaceNavKey } from "../workspace-navigation";
 import "./integrations.css";
@@ -213,6 +214,8 @@ export function IntegrationsModule({ diagnostics, project, onNavigate, onRefresh
             effect cleanup clears the interval.
           */}
           <GatewayUsagePanel onNavigate={onNavigate} />
+
+          <StoragePanel />
 
           <section className="integrations-panel">
             <header>

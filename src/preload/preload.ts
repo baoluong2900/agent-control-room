@@ -26,6 +26,8 @@ import type {
 const api: AgenticDesktopApi = {
   system: {
     diagnostics: (projectPath?: string | null) => ipcRenderer.invoke("system:diagnostics", projectPath),
+    storage: () => ipcRenderer.invoke("system:storage"),
+    cleanupStorage: () => ipcRenderer.invoke("system:cleanup-storage"),
   },
   projects: {
     selectFolder: () => ipcRenderer.invoke("project:select-folder"),
@@ -101,6 +103,15 @@ const api: AgenticDesktopApi = {
     stage: (cwd: string, path: string) => ipcRenderer.invoke("git:stage", cwd, path),
     unstage: (cwd: string, path: string) => ipcRenderer.invoke("git:unstage", cwd, path),
     commit: (cwd: string, message: string) => ipcRenderer.invoke("git:commit", cwd, message),
+    branches: (cwd: string) => ipcRenderer.invoke("git:branches", cwd),
+    checkout: (cwd: string, name: string, create?: boolean) => ipcRenderer.invoke("git:checkout", cwd, name, create),
+    stashes: (cwd: string) => ipcRenderer.invoke("git:stashes", cwd),
+    stashDetail: (cwd: string, ref: string) => ipcRenderer.invoke("git:stash-detail", cwd, ref),
+    stashPush: (cwd: string, message?: string, includeUntracked?: boolean) =>
+      ipcRenderer.invoke("git:stash-push", cwd, message, includeUntracked),
+    stashApply: (cwd: string, ref: string, keep?: boolean) => ipcRenderer.invoke("git:stash-apply", cwd, ref, keep),
+    stashDrop: (cwd: string, ref: string, expectedMessage?: string) =>
+      ipcRenderer.invoke("git:stash-drop", cwd, ref, expectedMessage),
   },
   knowledge: {
     get: (projectPath: string) => ipcRenderer.invoke("knowledge:get", projectPath),

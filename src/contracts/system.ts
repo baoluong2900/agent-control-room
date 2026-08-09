@@ -36,3 +36,23 @@ export interface SystemDiagnostics {
   checks: DiagnosticCheck[];
 }
 
+/** Where the app's storage sits and how much of it terminal logs account for. */
+export interface DatabaseStorageReport {
+  path: string;
+  schemaVersion: number;
+  sizeBytes: number;
+  terminalLogRows: number;
+  /** Days after a run ends before cleanup is allowed to drop its logs. */
+  retentionDays: number;
+}
+
+export interface DatabaseMaintenanceResult {
+  ok: boolean;
+  removedRows: number;
+  bytesBefore: number;
+  bytesAfter: number;
+  /** Bytes actually returned to the filesystem, which needs a vacuum to be > 0. */
+  bytesReclaimed: number;
+  message: string;
+}
+

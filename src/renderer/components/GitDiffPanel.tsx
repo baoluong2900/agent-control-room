@@ -1,8 +1,17 @@
-import { Check, FileDiff, GitBranch, GitCommit, RefreshCw, RotateCcw } from "lucide-react";
-import type { GitDiffSummary, GitFileChange, GitFileChangeKind, GitFileDiff, ProjectSummary } from "@contracts";
-import { useEffect, useMemo, useState } from "react";
+import { Archive, Check, FileDiff, GitBranch, GitCommit, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import type {
+  GitBranchSummary,
+  GitDiffSummary,
+  GitFileChange,
+  GitFileChangeKind,
+  GitFileDiff,
+  GitStashDetail,
+  GitStashEntry,
+  ProjectSummary,
+} from "@contracts";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-type PanelView = "files" | "patch" | "stat" | "log";
+type PanelView = "files" | "patch" | "stat" | "log" | "branches" | "stashes";
 
 const kindLabels: Record<GitFileChangeKind, string> = {
   added: "A",
@@ -30,6 +39,26 @@ export function GitDiffPanel({
   const [commitMessage, setCommitMessage] = useState("");
   const [committing, setCommitting] = useState(false);
   const [logEntries, setLogEntries] = useState<Array<{ hash: string; shortHash: string; author: string; date: string; subject: string }>>([]);
+  const [branches, setBranches] = useState<GitBranchSummary[]>([]);
+  const [newBranch, setNewBranch] = useState("");
+  const [stashes, setStashes] = useState<GitStashEntry[]>([]);
+  const [stashMessage, setStashMessage] = useState("");
+  const [includeUntracked, setIncludeUntracked] = useState(false);
+  const [stashDetail, setStashDetail] = useState<GitStashDetail | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Branch and stash lists are read on demand rather than pushed with the diff:
+  // both cost their own git invocation, and neither changes while the user is
+  // looking at the file list.
+  const loadBranches = useCallback(async () => {
+    if (!project) return;
+    setBranches(await window.agentic.git.branches(project.path));
+  }, [project]);
+
+  const loadStashes = useCallback(async () => {
+    if (!project) return;
+    setStashes(await window.agentic.git.stashes(project.path));
+  }, [project]);
 
   const staged = diff?.files.filter((file) => file.staged) ?? [];
   const unstaged = diff?.files.filter((file) => !file.staged) ?? [];
@@ -87,6 +116,17 @@ export function GitDiffPanel({
     };
   }, [project, view]);
 
+  useEffect(() => {
+    if (view === "branches") void loadBranches();
+    if (view === "stashes") void loadStashes();
+  }, [loadBranches, loadStashes, view]);
+
+  // A stale detail panel would describe a stash the user is no longer looking at,
+  // and after a drop the ref it names may belong to a different entry entirely.
+  useEffect(() => {
+    setStashDetail(null);
+  }, [project, stashes]);
+
   async function stage(file: GitFileChange) {
     if (!project) return;
     const result = await window.agentic.git.stage(project.path, file.path);
@@ -104,6 +144,24 @@ export function GitDiffPanel({
     await onRefresh();
     if (result.summary) {
       setSelected(result.summary.files.find((next) => next.path === file.path) ?? null);
+    }
+  }
+
+  /**
+   * Every branch/stash mutation goes through here so the panel cannot drift from
+   * git: one call, then re-read the diff *and* both lists, because a checkout
+   * changes the branch list and a stash push changes the file list too.
+   */
+  async function runGitAction(action: () => Promise<{ ok: boolean; message: string }>) {
+    if (!project || busy) return;
+    setBusy(true);
+    try {
+      const result = await action();
+      setOperationMessage(result.message);
+      await Promise.all([onRefresh(), loadBranches(), loadStashes()]);
+      return result;
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -136,6 +194,8 @@ export function GitDiffPanel({
             <ViewButton active={view === "patch"} disabled={!selected} label="Patch" onClick={() => setView("patch")} />
             <ViewButton active={view === "stat"} label="Stat" onClick={() => setView("stat")} />
             <ViewButton active={view === "log"} label="Log" onClick={() => setView("log")} />
+            <ViewButton active={view === "branches"} label="Branches" onClick={() => setView("branches")} />
+            <ViewButton active={view === "stashes"} label="Stashes" onClick={() => setView("stashes")} />
           </div>
           <button className="ghost-button" disabled={!project} onClick={() => void onRefresh()}>
             <RefreshCw size={14} />
@@ -167,6 +227,50 @@ export function GitDiffPanel({
           <PatchView fileDiff={fileDiff} loading={loadingPatch} selected={selected} />
         ) : view === "log" ? (
           <LogView entries={logEntries} />
+        ) : view === "branches" ? (
+          <BranchView
+            branches={branches}
+            busy={busy}
+            dirty={diff.unstagedCount + diff.stagedCount > 0}
+            newBranch={newBranch}
+            onCheckout={(name) => void runGitAction(() => window.agentic.git.checkout(project!.path, name))}
+            onCreate={() =>
+              void runGitAction(() => window.agentic.git.checkout(project!.path, newBranch, true)).then((result) => {
+                if (result?.ok) setNewBranch("");
+              })
+            }
+            onNewBranchChange={setNewBranch}
+          />
+        ) : view === "stashes" ? (
+          <StashView
+            busy={busy}
+            detail={stashDetail}
+            entries={stashes}
+            includeUntracked={includeUntracked}
+            message={stashMessage}
+            onApply={(entry, keep) => void runGitAction(() => window.agentic.git.stashApply(project!.path, entry.ref, keep))}
+            onDrop={(entry) => {
+              // Drop has no ordinary undo. Name the exact stack ref and message in
+              // the confirmation, then send that message to the backend as a
+              // second stack-shift guard before git is allowed to delete it.
+              const confirmed = window.confirm(`Drop ${entry.ref}?\n\n${entry.message}\n\nThis cannot be undone.`);
+              if (confirmed) {
+                void runGitAction(() => window.agentic.git.stashDrop(project!.path, entry.ref, entry.message));
+              }
+            }}
+            onIncludeUntrackedChange={setIncludeUntracked}
+            onInspect={async (entry) => {
+              setStashDetail(await window.agentic.git.stashDetail(project!.path, entry.ref));
+            }}
+            onMessageChange={setStashMessage}
+            onPush={() =>
+              void runGitAction(() =>
+                window.agentic.git.stashPush(project!.path, stashMessage, includeUntracked),
+              ).then((result) => {
+                if (result?.ok) setStashMessage("");
+              })
+            }
+          />
         ) : diff.files.length === 0 ? (
           <p className="git-empty">Clean working tree — nothing to review.</p>
         ) : (
@@ -309,6 +413,200 @@ function LogView({ entries }: { entries: Array<{ hash: string; shortHash: string
           </span>
         </article>
       ))}
+    </div>
+  );
+}
+
+function BranchView({
+  branches,
+  busy,
+  dirty,
+  newBranch,
+  onCheckout,
+  onCreate,
+  onNewBranchChange,
+}: {
+  branches: GitBranchSummary[];
+  busy: boolean;
+  dirty: boolean;
+  newBranch: string;
+  onCheckout: (name: string) => void;
+  onCreate: () => void;
+  onNewBranchChange: (value: string) => void;
+}) {
+  return (
+    <div className="git-workspace-view">
+      <div className="git-file-scroll">
+        {dirty && (
+          <p className="git-warning">
+            Uncommitted changes present. Switching branches is blocked until they are committed or stashed.
+          </p>
+        )}
+        {branches.length === 0 ? (
+          <p className="git-empty">No local branches found.</p>
+        ) : (
+          <div className="git-file-group">
+            <h3>
+              <GitBranch size={12} />
+              Local branches <span>{branches.length}</span>
+            </h3>
+            <ul>
+              {branches.map((branch) => (
+                <li className={branch.current ? "selected" : ""} key={branch.name} title={branch.subject ?? branch.name}>
+                  <span className="git-branch-row">
+                    <i className={`git-kind ${branch.current ? "git-kind-added" : "git-kind-modified"}`}>
+                      {branch.current ? "●" : "○"}
+                    </i>
+                    <span>{branch.name}</span>
+                    {branch.upstream && <em className="git-branch-upstream">{branch.upstream}</em>}
+                  </span>
+                  {branch.current ? (
+                    <em className="git-branch-current">current</em>
+                  ) : (
+                    <button
+                      className="git-row-action"
+                      disabled={busy || dirty}
+                      onClick={() => onCheckout(branch.name)}
+                      type="button"
+                    >
+                      <Check size={12} />
+                      Switch
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+      <form
+        className="git-commit-box"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onCreate();
+        }}
+      >
+        <label htmlFor="git-new-branch">Create branch from HEAD</label>
+        <input
+          className="git-inline-input"
+          id="git-new-branch"
+          onChange={(event) => onNewBranchChange(event.target.value)}
+          placeholder="feature/short-description"
+          value={newBranch}
+        />
+        <button className="primary-action" disabled={busy || dirty || !newBranch.trim()} type="submit">
+          <Plus size={13} />
+          Create and switch
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function StashView({
+  busy,
+  detail,
+  entries,
+  includeUntracked,
+  message,
+  onApply,
+  onDrop,
+  onIncludeUntrackedChange,
+  onInspect,
+  onMessageChange,
+  onPush,
+}: {
+  busy: boolean;
+  detail: GitStashDetail | null;
+  entries: GitStashEntry[];
+  includeUntracked: boolean;
+  message: string;
+  onApply: (entry: GitStashEntry, keep: boolean) => void;
+  onDrop: (entry: GitStashEntry) => void;
+  onIncludeUntrackedChange: (value: boolean) => void;
+  onInspect: (entry: GitStashEntry) => void;
+  onMessageChange: (value: string) => void;
+  onPush: () => void;
+}) {
+  return (
+    <div className="git-workspace-view">
+      <div className="git-file-scroll">
+        {entries.length === 0 ? (
+          <p className="git-empty">No stash entries.</p>
+        ) : (
+          <div className="git-file-group">
+            <h3>
+              <Archive size={12} />
+              Stash stack <span>{entries.length}</span>
+            </h3>
+            <ul>
+              {entries.map((entry) => (
+                <li key={entry.ref} title={`${entry.ref} · ${entry.message}`}>
+                  <button className="git-file-button" onClick={() => onInspect(entry)} type="button">
+                    <i className="git-kind git-kind-modified">{entry.index}</i>
+                    <span>{entry.message}</span>
+                  </button>
+                  <span className="git-stash-actions">
+                    {/* Apply keeps the entry, pop consumes it: both are offered
+                        because "restore and keep a copy" is the safer default and
+                        "restore and clean up" is what the user usually wants next. */}
+                    <button className="git-row-action" disabled={busy} onClick={() => onApply(entry, true)} type="button">
+                      <RotateCcw size={12} />
+                      Apply
+                    </button>
+                    <button className="git-row-action" disabled={busy} onClick={() => onApply(entry, false)} type="button">
+                      <Check size={12} />
+                      Pop
+                    </button>
+                    <button className="git-row-action" disabled={busy} onClick={() => onDrop(entry)} type="button">
+                      <Trash2 size={12} />
+                      Drop
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {detail && (
+          <div className="git-stash-detail">
+            <h3>
+              {detail.ref}
+              {detail.files.length > 0 && <span>{detail.files.length} files</span>}
+            </h3>
+            <pre>{detail.error ?? detail.patch ?? "No patch for this stash."}</pre>
+          </div>
+        )}
+      </div>
+      <form
+        className="git-commit-box"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onPush();
+        }}
+      >
+        <label htmlFor="git-stash-message">Stash current changes</label>
+        <input
+          className="git-inline-input"
+          id="git-stash-message"
+          onChange={(event) => onMessageChange(event.target.value)}
+          placeholder="Optional description"
+          value={message}
+        />
+        <label className="git-checkbox" htmlFor="git-stash-untracked">
+          <input
+            checked={includeUntracked}
+            id="git-stash-untracked"
+            onChange={(event) => onIncludeUntrackedChange(event.target.checked)}
+            type="checkbox"
+          />
+          Include untracked files
+        </label>
+        <button className="primary-action" disabled={busy} type="submit">
+          <Archive size={13} />
+          Stash
+        </button>
+      </form>
     </div>
   );
 }

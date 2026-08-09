@@ -22,10 +22,17 @@ import { listAgentCatalog } from "../agents/catalog";
 import { pingAgentCli, pingAllAgentClis, probeAgentModels } from "../agents/probe";
 import type { DesktopDatabase } from "../database/desktop-database";
 import {
+  applyGitStash,
+  checkoutGitBranch,
   commitGitChanges,
+  createGitStash,
+  dropGitStash,
+  readGitBranches,
   readGitDiff,
   readGitFileDiff,
   readGitLog,
+  readGitStashDetail,
+  readGitStashes,
   stageGitFile,
   unstageGitFile,
 } from "../git/git-service";
@@ -88,6 +95,9 @@ export function registerIpcHandlers({
         : undefined,
     }),
   );
+
+  ipcMain.handle("system:storage", () => database.storageReport());
+  ipcMain.handle("system:cleanup-storage", () => database.runMaintenance());
 
   ipcMain.handle("project:select-folder", () => projectService.selectFolder());
   ipcMain.handle("project:list-recent", () => projectService.listRecent());
@@ -186,14 +196,42 @@ export function registerIpcHandlers({
     ipcMain.handle("gateway:usage-snapshot", (_event, days?: number) => gatewayUsageService.getSnapshot(days));
   }
 
-  ipcMain.handle("git:diff", (_event, cwd: string) => readGitDiff(cwd));
+  // Renderer-provided paths are untrusted IPC input. Every Git operation — reads
+  // included, because file diff/log expose repository contents — is scoped to a
+  // folder selected through the native project picker and stored in recent projects.
+  const approvedGitCwd = (cwd: string) => projectService.requireApprovedPath(cwd);
+
+  ipcMain.handle("git:diff", (_event, cwd: string) => readGitDiff(approvedGitCwd(cwd)));
   ipcMain.handle("git:file-diff", (_event, cwd: string, filePath: string, staged?: boolean) =>
-    readGitFileDiff(cwd, filePath, staged),
+    readGitFileDiff(approvedGitCwd(cwd), filePath, staged),
   );
-  ipcMain.handle("git:log", (_event, cwd: string, limit?: number) => readGitLog(cwd, limit));
-  ipcMain.handle("git:stage", (_event, cwd: string, filePath: string) => stageGitFile(cwd, filePath));
-  ipcMain.handle("git:unstage", (_event, cwd: string, filePath: string) => unstageGitFile(cwd, filePath));
-  ipcMain.handle("git:commit", (_event, cwd: string, message: string) => commitGitChanges(cwd, message));
+  ipcMain.handle("git:log", (_event, cwd: string, limit?: number) => readGitLog(approvedGitCwd(cwd), limit));
+  ipcMain.handle("git:stage", (_event, cwd: string, filePath: string) =>
+    stageGitFile(approvedGitCwd(cwd), filePath),
+  );
+  ipcMain.handle("git:unstage", (_event, cwd: string, filePath: string) =>
+    unstageGitFile(approvedGitCwd(cwd), filePath),
+  );
+  ipcMain.handle("git:commit", (_event, cwd: string, message: string) =>
+    commitGitChanges(approvedGitCwd(cwd), message),
+  );
+  ipcMain.handle("git:branches", (_event, cwd: string) => readGitBranches(approvedGitCwd(cwd)));
+  ipcMain.handle("git:checkout", (_event, cwd: string, name: string, create?: boolean) =>
+    checkoutGitBranch(approvedGitCwd(cwd), name, create),
+  );
+  ipcMain.handle("git:stashes", (_event, cwd: string) => readGitStashes(approvedGitCwd(cwd)));
+  ipcMain.handle("git:stash-detail", (_event, cwd: string, ref: string) =>
+    readGitStashDetail(approvedGitCwd(cwd), ref),
+  );
+  ipcMain.handle("git:stash-push", (_event, cwd: string, message?: string, includeUntracked?: boolean) =>
+    createGitStash(approvedGitCwd(cwd), message, includeUntracked),
+  );
+  ipcMain.handle("git:stash-apply", (_event, cwd: string, ref: string, keep?: boolean) =>
+    applyGitStash(approvedGitCwd(cwd), ref, keep),
+  );
+  ipcMain.handle("git:stash-drop", (_event, cwd: string, ref: string, expectedMessage?: string) =>
+    dropGitStash(approvedGitCwd(cwd), ref, expectedMessage),
+  );
 
   ipcMain.handle("knowledge:get", (_event, projectPath: string) => knowledgeService.get(projectPath));
   ipcMain.handle("knowledge:scan", (_event, input: KnowledgeScanInput) => knowledgeService.scan(input));

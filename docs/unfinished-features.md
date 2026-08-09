@@ -228,7 +228,20 @@ Status update 2026-08-04:
 - Main service returns refreshed `GitDiffSummary` after write operations so UI refreshes from Git state.
 - Stage/unstage/commit are intentionally scoped to local repository state; no outbound `push` was added.
 
-Residual: branch checkout/create, push/pull/fetch, stash, blame, conflict resolution, structured binary/truncated diff metadata, and better missing-git error classification remain future Git workspace work.
+Update 2026-08-09: **branch + stash đã xong.** Git Workspace có thêm hai tab:
+Branches (list/current/upstream, create + switch) và Stashes (push có option include
+untracked, inspect patch, apply/pop/drop). Checkout từ chối mang tracked edits sang
+branch khác; restore stash yêu cầu tree sạch hoàn toàn; drop gửi lại message đã render
+để chặn xoá nhầm khi stack `stash@{n}` đã dịch. Backend/IPC/preload/UI được pin bởi
+`tests/git-branch-stash.test.ts` và `tests/desktop-feature-wiring.test.ts`.
+
+Security review trước commit bắt thêm một gap: Git IPC từng tin `cwd` do renderer gửi.
+Giờ **mọi** channel `git:*` đều đi qua approved-project allowlist; path hai phía được
+`realpath` để symlink alias không bypass. Privileged BrowserWindow cũng chặn
+`will-navigate` và popup để external content không thừa hưởng preload bridge.
+`tests/project-path-security.test.ts` pin allow/revoke/symlink behavior.
+
+Residual: push/pull/fetch, blame, conflict resolution, structured binary/truncated diff metadata, and better missing-git error classification remain future Git workspace work.
 
 Việc nên làm tiếp: add reversible/local operations before outbound ones; treat `push` as a separate plan with explicit confirmation and protected-branch/credential handling.
 
@@ -348,21 +361,38 @@ Residual: pause/resume stays out of scope unless a CLI exposes an
 application-level checkpoint/resume capability — SIGSTOP mid-stream leaves a dead
 provider connection behind, which is a worse state than stopping outright.
 
-### A2 — Structured chat resume chỉ áp dụng Claude/Agy
+### A2 — Structured chat resume đã mở rộng sang Grok/OpenCode
 
-Evidence:
+Update 2026-08-09: capability đã catalog-driven từ trước; pass này thêm block thật cho
+Grok và OpenCode sau khi verify CLI thật, không đoán flag:
 
-- `usesStructuredChat()` chỉ trả true khi `uiMode === "chat"` và CLI là `claude` hoặc `agy` tại `src/main/agents/commands.ts:202` đến `src/main/agents/commands.ts:204`.
-- Structured chat args chỉ định nghĩa cho Claude/Agy tại `src/main/agents/commands.ts:206` đến `src/main/agents/commands.ts:222`.
-- `conversationId` chỉ extract từ JSON field `session_id` hoặc `conversation_id` tại `src/main/processes/agent-process-manager.ts:375` đến `src/main/processes/agent-process-manager.ts:383`.
+- Grok: `--output-format json --single <prompt>`, id=`sessionId`, resume bằng
+  `--resume <id>`. Harness 2 turn qua `AgentProcessManager` pass toàn bộ và nhớ đúng
+  codeword cùng session id.
+- OpenCode: `run --format json <prompt>`, JSONL answer nằm ở `part.text`,
+  id=`sessionID`, resume bằng `--session <id>`. Hai lượt gọi CLI trực tiếp nhớ đúng
+  codeword. Harness qua manager xác nhận argv + id capture nhưng upstream hiện trả
+  503 `The request queue is full`, nên live manager completion chưa xanh vì service,
+  không phải invocation/parser.
+- Renderer parser được tách sang `structured-chat-output.ts`, hiểu cả whole JSON và
+  JSONL, bỏ qua `step_start/step_finish`, giữ thứ tự nhiều text event.
 
-Hệ quả: Chat UI có thể dùng chung nhiều agent profile, nhưng resume conversation/provider-native structured chat chưa general cho Codex/Gemini/Kiro/Grok/etc.
-
-Việc nên làm: thêm capability flags trong catalog: `supportsStructuredChat`, `resumeArgs`, `conversationIdExtractor`, hoặc ẩn resume/chat-specific affordances cho provider chưa hỗ trợ.
+Residual: Codex `exec resume` là **subcommand** (`codex exec resume <id> <prompt>`),
+không biểu diễn được bằng `resumeFlag`; máy này còn lỗi auth `access token could not
+be refreshed`, nên chưa thêm một catalog entry không verify được. Gemini/Kiro cũng
+chỉ mở chat khi có wire format + resume semantics được kiểm chứng thật.
 
 ### A3 — Terminal log retention đã có
 
-Status update 2026-08-04: terminal log storage now has per-message truncation with a visible marker, per-run row pruning, and startup cleanup for old finished-run logs. Long-running noisy agents no longer grow SQLite without bound. Remaining nice-to-have: expose database/log size and manual cleanup controls in Settings/Diagnostics.
+Status update 2026-08-04: terminal log storage now has per-message truncation with a visible marker, per-run row pruning, and startup cleanup for old finished-run logs. Long-running noisy agents no longer grow SQLite without bound.
+
+Update 2026-08-09: residual cuối đã xong. Integrations/Diagnostics có Local Storage
+panel hiển thị sqlite path, file size, schema, terminal log row count và retention
+window; “Clean up now” xoá log của finished runs quá hạn rồi chạy `VACUUM`, trả về
+row count + byte delta thật. Active run không bị chạm. Test load-bearing chứng minh
+bỏ `VACUUM` thì file giữ nguyên `2637824 -> 2637824` và suite fail. Retention
+window là policy cố định 30 ngày ở database service; renderer/IPC không nhận tham số
+tuỳ ý, nên nút cleanup không thể bị biến thành “xoá toàn bộ finished-run history”.
 
 ## 7. AI gateway / router: tài liệu kiến trúc đã mô tả nhiều hơn runtime hiện tại
 
