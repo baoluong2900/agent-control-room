@@ -734,7 +734,14 @@ export class DesktopDatabase {
     }
 
     try {
+      // In WAL mode a DELETE lands in `-wal`; VACUUM can do the same. A physical
+      // size measurement before checkpointing would therefore claim the main DB
+      // shrank while the bytes merely moved into (or grew inside) the WAL file.
+      // Truncate both before and after VACUUM so the reported delta is what the
+      // filesystem actually holds after maintenance settles.
+      this.checkpointWal();
       this.db.exec("vacuum");
+      this.checkpointWal();
     } catch (error) {
       // The rows are gone even if the file did not shrink; report that honestly
       // rather than claiming a failure that lost no data.
@@ -774,23 +781,43 @@ export class DesktopDatabase {
   }
 
   /**
-   * Read-only database health snapshot for diagnostics. `page_count * page_size`
-   * reflects the real SQLite file footprint (including free pages), while the
-   * terminal row count shows whether agent output is the likely source of
-   * growth. No provider or app state is mutated by collecting this.
+   * Read-only database health snapshot for diagnostics. Size is the physical
+   * footprint of the main database plus its WAL/shared-memory sidecars — not
+   * `page_count * page_size`, which is only a logical size and can under-report
+   * by megabytes while WAL mode is active.
    */
   databaseHealth(): { schemaVersion: number; sizeBytes: number; terminalLogRows: number } {
-    const pageCount = this.db.prepare("pragma page_count").get() as { page_count?: number } | undefined;
-    const pageSize = this.db.prepare("pragma page_size").get() as { page_size?: number } | undefined;
     const logs = this.db.prepare("select count(*) as total from terminal_logs").get() as
       | { total: number | null }
       | undefined;
 
     return {
       schemaVersion: this.schemaVersion(),
-      sizeBytes: Number(pageCount?.page_count ?? 0) * Number(pageSize?.page_size ?? 0),
+      sizeBytes: this.physicalDatabaseBytes(),
       terminalLogRows: Number(logs?.total ?? 0),
     };
+  }
+
+  /** Main sqlite file plus WAL/SHM sidecars, ignoring files not present yet. */
+  private physicalDatabaseBytes(): number {
+    if (!this.sqlitePath) return 0;
+    return [this.sqlitePath, `${this.sqlitePath}-wal`, `${this.sqlitePath}-shm`].reduce((total, file) => {
+      try {
+        return total + fs.statSync(file).size;
+      } catch {
+        return total;
+      }
+    }, 0);
+  }
+
+  /** Throws when SQLite reports a busy checkpoint, so cleanup never overclaims. */
+  private checkpointWal(): void {
+    const row = this.db.prepare("pragma wal_checkpoint(truncate)").get() as
+      | { busy?: number; log?: number; checkpointed?: number }
+      | undefined;
+    if (Number(row?.busy ?? 0) !== 0) {
+      throw new Error("Database is busy; WAL checkpoint could not complete.");
+    }
   }
 
   listTerminalLogs(runId: string, limit = 400): TerminalLogRow[] {

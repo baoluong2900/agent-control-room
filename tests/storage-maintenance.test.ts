@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -22,6 +23,32 @@ import {
 
 async function openDatabase(label: string): Promise<DesktopDatabase> {
   return DesktopDatabase.open(path.join(os.tmpdir(), `agentic-${label}-${Date.now()}-${Math.random()}`));
+}
+
+/**
+ * What the filesystem actually holds for this database.
+ *
+ * WAL mode spreads a database across three files, and a DELETE (or a VACUUM)
+ * writes into `-wal` rather than the main file. Measuring only the `.sqlite` file
+ * — or sqlite's logical `page_count * page_size` — reports space as returned
+ * while the bytes are still on disk in the WAL.
+ */
+function physicalBytes(sqlitePath: string): number {
+  return [sqlitePath, `${sqlitePath}-wal`, `${sqlitePath}-shm`].reduce((total, file) => {
+    try {
+      return total + fs.statSync(file).size;
+    } catch {
+      return total;
+    }
+  }, 0);
+}
+
+function walBytes(sqlitePath: string): number {
+  try {
+    return fs.statSync(`${sqlitePath}-wal`).size;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -89,9 +116,14 @@ test("cleanup reclaims space rather than leaving it on sqlite's free list", asyn
   // Large enough that the freed pages are visible against sqlite's own overhead.
   seedFinishedRun(db, "run-bulk", 4000, logRetention.maxRunAgeDays + 10);
 
-  const before = db.storageReport().sizeBytes;
+  const reportBefore = db.storageReport();
+  const before = reportBefore.sizeBytes;
+  // The report must be a filesystem fact, not sqlite's logical page arithmetic.
+  assert.equal(before, physicalBytes(reportBefore.path), "the size covers the main DB plus its WAL/SHM sidecars");
+
   const result = db.runMaintenance();
-  const after = db.storageReport().sizeBytes;
+  const reportAfter = db.storageReport();
+  const after = reportAfter.sizeBytes;
 
   assert.equal(result.ok, true, result.message);
   assert.ok(result.removedRows >= 4000 * 0.5, `expected the bulk rows removed, got ${result.removedRows}`);
@@ -101,6 +133,31 @@ test("cleanup reclaims space rather than leaving it on sqlite's free list", asyn
   assert.equal(result.bytesBefore, before);
   assert.equal(result.bytesAfter, after);
   assert.equal(result.bytesReclaimed, before - after, "the reported delta is the real one");
+
+  // The claim has to survive an independent measurement: bytes the UI says were
+  // returned must be gone from disk now, not merely moved into the WAL to be
+  // checkpointed at some later close.
+  assert.equal(after, physicalBytes(reportAfter.path), "the post-cleanup size equals the live filesystem footprint");
+  assert.equal(walBytes(reportAfter.path), 0, "cleanup checkpoints and truncates the WAL before reporting");
+
+  db.close();
+});
+
+test("storage size reflects WAL writes instead of only the main database file", async () => {
+  const db = await openDatabase("storage-wal-size");
+  const before = db.storageReport();
+
+  // These rows land in the WAL, so a logical `page_count * page_size` reading (or
+  // a stat of the .sqlite file alone) would under-report the growth entirely.
+  seedFinishedRun(db, "run-wal", 800, 1);
+  const after = db.storageReport();
+
+  assert.ok(
+    after.sizeBytes > before.sizeBytes,
+    `expected physical storage to grow, ${before.sizeBytes} -> ${after.sizeBytes}`,
+  );
+  assert.equal(after.sizeBytes, physicalBytes(after.path), "the report matches the filesystem while the WAL is hot");
+  assert.ok(walBytes(after.path) > 0, "the growth is genuinely sitting in the WAL file");
 
   db.close();
 });
@@ -134,7 +191,20 @@ test("cleanup on an empty store reports that there was nothing to remove", async
   assert.equal(result.ok, true, result.message);
   assert.equal(result.removedRows, 0);
   assert.match(result.message, /No logs older than/);
-  assert.match(describeMaintenance(result), /already compact/);
+
+  // A freshly migrated database still carries schema writes in its WAL, so a
+  // checkpoint+vacuum legitimately returns some bytes even with nothing expired.
+  // What must hold is that the reported numbers are real, not that they are zero.
+  const report = db.storageReport();
+  assert.equal(result.bytesAfter, report.sizeBytes);
+  assert.equal(result.bytesAfter, physicalBytes(report.path), "the reported size is a filesystem measurement");
+  assert.equal(result.bytesReclaimed, result.bytesBefore - result.bytesAfter);
+  assert.equal(walBytes(report.path), 0, "the WAL was checkpointed away");
+  assert.match(
+    describeMaintenance(result),
+    result.bytesReclaimed > 0 ? /No expired log rows; .* reclaimed/ : /already compact/,
+    "the sentence matches whichever outcome actually happened",
+  );
 
   db.close();
 });

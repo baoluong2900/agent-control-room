@@ -391,7 +391,11 @@ Update 2026-08-09: residual cuối đã xong. Integrations/Diagnostics có Local
 panel hiển thị sqlite path, file size, schema, terminal log row count và retention
 window; “Clean up now” xoá log của finished runs quá hạn rồi chạy `VACUUM`, trả về
 row count + byte delta thật. Active run không bị chạm. Test load-bearing chứng minh
-bỏ `VACUUM` thì file giữ nguyên `2637824 -> 2637824` và suite fail. Retention
+bỏ `VACUUM` thì file giữ nguyên `2637824 -> 2637824` và suite fail. Size là **physical
+footprint thật** (`.sqlite` + `-wal` + `-shm`), không phải `page_count * page_size`:
+trong WAL mode logical size under-report vài MB, nên panel từng có thể báo "đã thu hồi"
+khi bytes chỉ chuyển sang WAL. Cleanup checkpoint (`wal_checkpoint(truncate)`) trước và
+sau `VACUUM` rồi mới đo, đã verify thật `6663720 -> 233472` bytes với WAL về 0. Retention
 window là policy cố định 30 ngày ở database service; renderer/IPC không nhận tham số
 tuỳ ý, nên nút cleanup không thể bị biến thành “xoá toàn bộ finished-run history”.
 
