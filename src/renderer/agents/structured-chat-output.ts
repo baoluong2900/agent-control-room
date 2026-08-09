@@ -43,6 +43,23 @@ export function firstStructuredText(value: unknown): string | null {
     if (typeof part.text === "string" && part.text.trim()) return part.text.trim();
   }
 
+  // codex: {"type":"item.completed","item":{"type":"agent_message","text":"…"}}.
+  // Only `agent_message` is the reply. The same envelope also carries
+  // `command_execution` items — whose `aggregated_output` holds raw shell output —
+  // and `error` items whose `message` would otherwise be read as the answer by
+  // the generic key scan below. So the item type is matched explicitly and every
+  // other item resolves to null, which shows the raw stream instead of lying.
+  if (typeof record.type === "string" && record.type.startsWith("item.")) {
+    const item = record.item;
+    if (item && typeof item === "object") {
+      const itemRecord = item as Record<string, unknown>;
+      if (itemRecord.type === "agent_message" && typeof itemRecord.text === "string") {
+        return itemRecord.text.trim() || null;
+      }
+    }
+    return null;
+  }
+
   // Events that are pure bookkeeping carry no answer; returning null lets the
   // caller keep scanning instead of yielding a step id as if it were text.
   if (typeof record.type === "string" && /^step[_-]/.test(record.type)) return null;

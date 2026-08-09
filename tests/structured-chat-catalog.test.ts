@@ -49,19 +49,55 @@ const OPENCODE_JSONL = [
   }),
 ].join("\n");
 
-test("grok and opencode now declare a chat capability", () => {
-  for (const cliId of ["claude", "agy", "grok", "opencode"] as const) {
+/**
+ * `codex exec --json "…"` — real captured stdout, 2026-08-09. JSONL where the
+ * answer is the `agent_message` item and a shell step arrives first as a
+ * `command_execution` item carrying its raw output.
+ */
+const CODEX_JSONL = [
+  JSON.stringify({ type: "thread.started", thread_id: "019fe72b-61c8-7292-aa33-90ef1b638132" }),
+  JSON.stringify({ type: "turn.started" }),
+  JSON.stringify({
+    type: "item.started",
+    item: {
+      id: "item_0",
+      type: "command_execution",
+      command: "/bin/zsh -lc 'ls -1'",
+      aggregated_output: "",
+      exit_code: null,
+      status: "in_progress",
+    },
+  }),
+  JSON.stringify({
+    type: "item.completed",
+    item: {
+      id: "item_0",
+      type: "command_execution",
+      command: "/bin/zsh -lc 'ls -1'",
+      aggregated_output: "ARCHITECTURE.md\nCLAUDE.md\ndocs\n",
+      exit_code: 0,
+      status: "completed",
+    },
+  }),
+  JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "25" } }),
+  JSON.stringify({ type: "turn.completed", usage: { input_tokens: 26485, output_tokens: 59 } }),
+].join("\n");
+
+test("grok, opencode and codex now declare a chat capability", () => {
+  for (const cliId of ["claude", "agy", "grok", "opencode", "codex"] as const) {
     assert.ok(structuredChatFor(cliId), `${cliId} should declare structuredChat`);
     assert.equal(usesStructuredChat({ cliId, uiMode: "chat" }), true, `${cliId} chat should be enabled`);
   }
 });
 
-test("codex stays out until its resume subcommand is supported", () => {
-  // `codex exec resume <id> <prompt>` is a subcommand, not a `<flag> <id>` pair,
-  // so the current capability shape cannot express it. Declaring it anyway would
-  // build argv that silently starts a fresh session every turn.
-  assert.equal(structuredChatFor("codex"), undefined);
-  assert.equal(usesStructuredChat({ cliId: "codex", uiMode: "chat" }), false);
+test("codex chat is expressed as a resume subcommand", () => {
+  // `codex exec resume <id> <prompt>` is a subcommand, not a `<flag> <id>` pair.
+  // Expressing it as `resumeFlag` would build argv that silently starts a fresh
+  // thread every turn, so the capability must carry `resumeArgs` instead.
+  const chat = structuredChatFor("codex");
+  assert.ok(chat);
+  assert.equal(chat?.resumeFlag, undefined);
+  assert.deepEqual(chat?.resumeArgs, ["exec", "resume", "--json", "{id}"]);
 });
 
 test("shell can never be a chat target", () => {
@@ -75,7 +111,11 @@ test("every declared chat capability is internally consistent", () => {
     if (!chat) continue;
 
     assert.ok(chat.args.length > 0, `${descriptor.id}: chat args must not be empty`);
-    assert.ok(chat.resumeFlag.startsWith("-"), `${descriptor.id}: resumeFlag must be a flag`);
+    if (chat.resumeFlag) {
+      assert.ok(chat.resumeFlag.startsWith("-"), `${descriptor.id}: resumeFlag must be a flag`);
+    } else {
+      assert.ok(chat.resumeArgs?.length, `${descriptor.id}: needs resumeFlag or resumeArgs`);
+    }
     if (chat.promptFlag) {
       assert.ok(
         chat.args.includes(chat.promptFlag),
@@ -144,6 +184,13 @@ test("the conversation id is read from each CLI's own field", () => {
     "opencode names it sessionID and repeats it on every JSONL line",
   );
 
+  const codexFields = getAgentDescriptor("codex").structuredChat?.conversationIdFields;
+  assert.equal(
+    extractConversationId(CODEX_JSONL, codexFields),
+    "019fe72b-61c8-7292-aa33-90ef1b638132",
+    "codex names it thread_id and only prints it on the thread.started line",
+  );
+
   // The generic default still covers claude/agy, which use snake_case.
   assert.equal(extractConversationId(JSON.stringify({ session_id: "abc" })), "abc");
   assert.equal(extractConversationId(JSON.stringify({ conversation_id: "def" })), "def");
@@ -160,6 +207,32 @@ test("the answer is extracted from every real payload shape", () => {
   );
   assert.equal(extractStructuredAssistantText(JSON.stringify({ result: "claude answer" })), "claude answer");
   assert.equal(extractStructuredAssistantText(JSON.stringify({ response: "agy answer" })), "agy answer");
+  assert.equal(
+    extractStructuredAssistantText(CODEX_JSONL),
+    "25",
+    "codex answers in the agent_message item's text",
+  );
+});
+
+test("codex shell output and errors never masquerade as the answer", () => {
+  // `command_execution.aggregated_output` is a directory listing here. Rendering
+  // it as the reply would look like a plausible answer and be wrong every time.
+  const answer = extractStructuredAssistantText(CODEX_JSONL);
+  assert.equal(answer, "25");
+  assert.ok(!answer?.includes("ARCHITECTURE.md"), "raw shell output must not leak into the message");
+
+  // A failed turn carries prose in `error.message`. It must fall through to null
+  // so the panel shows the raw stream rather than presenting the failure text as
+  // if the agent had replied with it.
+  const failed = [
+    JSON.stringify({ type: "thread.started", thread_id: "t1" }),
+    JSON.stringify({
+      type: "item.completed",
+      item: { id: "item_1", type: "error", message: "Model metadata for `gpt-5-codex` not found." },
+    }),
+    JSON.stringify({ type: "turn.failed", error: { message: "unknown provider for model gpt-5-codex" } }),
+  ].join("\n");
+  assert.equal(extractStructuredAssistantText(failed), null);
 });
 
 test("grok's `thought` never displaces its `text` answer", () => {

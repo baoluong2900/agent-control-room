@@ -118,13 +118,20 @@ export async function buildInvocation(input: AgentRunInput): Promise<Invocation>
   const args = overrideParts.slice(1);
   const chat = input.uiMode === "chat" ? descriptor.structuredChat : undefined;
   const structuredChat = Boolean(chat);
+  const resumeId = chat ? input.resumeConversationId?.trim() || undefined : undefined;
+  // A resume *subcommand* replaces the fresh-turn args wholesale (`codex exec`
+  // becomes `codex exec resume <id>`), so it is chosen here rather than appended
+  // later like `resumeFlag`.
+  const resumeSubcommand = resumeId && chat?.resumeArgs?.length ? chat.resumeArgs : undefined;
 
   // A chat promptFlag carries the prompt as its value, so it must be emitted
   // last (after resume args) rather than in its declared position.
   const chatArgs = chat
-    ? chat.promptFlag
-      ? chat.args.filter((arg) => arg !== chat.promptFlag)
-      : chat.args
+    ? resumeSubcommand
+      ? resumeSubcommand.map((arg) => (arg === "{id}" ? resumeId! : arg))
+      : chat.promptFlag
+        ? chat.args.filter((arg) => arg !== chat.promptFlag)
+        : chat.args
     : [];
 
   args.push(...(chat ? chatArgs : input.interactive ? descriptor.interactiveArgs : descriptor.baseArgs));
@@ -139,13 +146,20 @@ export async function buildInvocation(input: AgentRunInput): Promise<Invocation>
     args.push(model);
   }
 
+  // Flags a resumed turn cannot carry. `codex exec resume` accepts a much
+  // smaller flag set than `codex exec`, and an unknown flag is a hard argv error
+  // — so a profile with a sandbox choice would answer turn 1 and die on turn 2.
+  const dropOnResume = resumeId ? chat?.resumeDropsFlags ?? [] : [];
+  const forResume = (candidate: string[]): string[] =>
+    dropOnResume.length ? withoutFlags(candidate, dropOnResume) : candidate;
+
   if (input.extraArgs?.trim()) {
     const extraArgs = parseArgs(input.extraArgs.trim());
-    args.push(...(chat ? withoutStructuredChatConflicts(extraArgs, chat.args) : extraArgs));
+    args.push(...forResume(chat ? withoutStructuredChatConflicts(extraArgs, chat.args) : extraArgs));
   }
 
   if (input.autoApprove && descriptor.autoApproveArgs?.length) {
-    args.push(...descriptor.autoApproveArgs);
+    args.push(...forResume(descriptor.autoApproveArgs));
   }
 
   const systemPrompt = input.systemPrompt?.trim();
@@ -153,10 +167,14 @@ export async function buildInvocation(input: AgentRunInput): Promise<Invocation>
     args.push(descriptor.systemPromptFlag, systemPrompt);
   }
 
-  args.push(...buildOptionArgs(descriptor, input.options, { interactive: Boolean(input.interactive) }));
+  args.push(
+    ...forResume(buildOptionArgs(descriptor, input.options, { interactive: Boolean(input.interactive) })),
+  );
 
-  if (chat && input.resumeConversationId?.trim()) {
-    args.push(chat.resumeFlag, input.resumeConversationId.trim());
+  // `resumeFlag` appends `<flag> <id>`; a `resumeArgs` CLI already carries the id
+  // inside its subcommand, so appending it again would pass it twice.
+  if (chat && resumeId && !resumeSubcommand && chat.resumeFlag) {
+    args.push(chat.resumeFlag, resumeId);
   }
 
   // Structured chat never pipes the prompt: these CLIs are one-shot print-mode
@@ -244,11 +262,23 @@ export function structuredChatFor(cliId: AgentCliId): AgentStructuredChat | unde
  * `--output-format` values otherwise makes behaviour depend on the CLI parser.
  */
 export function withoutStructuredChatConflicts(extraArgs: string[], chatArgs: string[]): string[] {
-  const ownedFlags = new Set(chatArgs.filter((arg) => arg.startsWith("-")));
+  return withoutFlags(extraArgs, chatArgs.filter((arg) => arg.startsWith("-")));
+}
+
+/**
+ * Drops the named flags — and the value token that follows a `--flag value`
+ * pair — from an argv list.
+ *
+ * A flag whose value is dropped but whose value token survives is worse than
+ * leaving both: the orphaned value becomes a positional argument, which for a
+ * chat CLI means it is read as the prompt.
+ */
+export function withoutFlags(argv: string[], flags: string[]): string[] {
+  const ownedFlags = new Set(flags);
   const filtered: string[] = [];
 
-  for (let index = 0; index < extraArgs.length; index += 1) {
-    const arg = extraArgs[index];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
     const flag = arg.split("=", 1)[0];
     if (!ownedFlags.has(flag)) {
       filtered.push(arg);
@@ -257,7 +287,7 @@ export function withoutStructuredChatConflicts(extraArgs: string[], chatArgs: st
 
     // `--flag=value` is self-contained. For `--flag value`, discard the value
     // too unless the next token is another flag.
-    if (!arg.includes("=") && extraArgs[index + 1] && !extraArgs[index + 1].startsWith("-")) {
+    if (!arg.includes("=") && argv[index + 1] && !argv[index + 1].startsWith("-")) {
       index += 1;
     }
   }

@@ -391,13 +391,31 @@ const catalog: AgentCliDescriptor[] = [
     supportsInteractive: true,
     supportsStdin: true,
     autoApproveArgs: ["--dangerously-bypass-approvals-and-sandbox"],
-    // No `structuredChat` block on purpose. `codex exec --json` does emit JSONL,
-    // but resuming is a *subcommand* — `codex exec resume <SESSION_ID> <PROMPT>`
-    // — not a flag, so it does not fit `resumeFlag`, which appends `<flag> <id>`
-    // after the args. Supporting it needs a resume *argv template* in the
-    // capability, and that could not be verified here: this machine's codex
-    // login returns "access token could not be refreshed", so any entry would be
-    // a guess. Chat stays hidden for codex until both are true.
+    structuredChat: {
+      // Verified live on 2026-08-09, both turns through the real CLI.
+      //
+      // Fresh turn: `codex exec --json "<prompt>"` emits JSONL —
+      // `{"type":"thread.started","thread_id":…}` then `turn.started`, then
+      // `{"type":"item.completed","item":{"type":"agent_message","text":"…"}}`.
+      // The answer is the agent_message item's `text`; `command_execution` items
+      // carry shell output and must not be read as the reply.
+      //
+      // Resume is a **subcommand**, not a flag: `codex exec resume <ID> <PROMPT>`.
+      // Hence `resumeArgs` rather than `resumeFlag` — appending `--resume <id>`
+      // to `codex exec` is not a valid argv and would start a new thread each
+      // turn. Verified: turn 2 recalled the codeword stored in turn 1 under the
+      // same `thread_id`.
+      args: ["exec", "--json"],
+      resumeArgs: ["exec", "resume", "--json", "{id}"],
+      // `codex exec resume --help` accepts only --last/--all/-c/--enable/-i/
+      // --model/--json/--output-schema/-o/--ephemeral/--ignore-*/--strict-config/
+      // --skip-git-repo-check/--dangerously-*. Passing `--sandbox` to it fails
+      // outright with `error: unexpected argument '--sandbox' found`, so the
+      // options below are stripped from resumed turns.
+      resumeDropsFlags: ["--sandbox", "--add-dir", "--profile", "--oss"],
+      conversationIdFields: ["thread_id"],
+      outputFormat: "jsonl",
+    },
     // Verified against `codex exec --help`.
     options: [
       {
@@ -439,10 +457,18 @@ const catalog: AgentCliDescriptor[] = [
         advanced: true,
       },
     ],
+    // `default` sends no `-m`, so codex uses the `model` from its own
+    // `~/.codex/config.toml`. That is the recommended entry because a pinned id
+    // here is a claim about the account's routing: on this machine every id the
+    // catalog used to recommend (`gpt-5-codex`, `gpt-5`, `o4-mini`) now fails the
+    // request with `unknown provider for model` / `model_not_found`, while the
+    // CLI default answers. A stale hard-coded id turns a working CLI into a
+    // broken agent card.
     models: [
-      { id: "gpt-5-codex", label: "gpt-5-codex", note: "Codex-tuned", recommended: true },
-      { id: "gpt-5", label: "gpt-5", note: "General purpose" },
-      { id: "o4-mini", label: "o4-mini", note: "Cheap reasoning" },
+      { id: "default", label: "CLI default", note: "Whatever ~/.codex/config.toml selects", recommended: true },
+      { id: "gpt-5.1-codex-max", label: "gpt-5.1-codex-max", note: "Codex-tuned, if your account has it" },
+      { id: "gpt-5.1-codex", label: "gpt-5.1-codex", note: "Codex-tuned" },
+      { id: "gpt-5.1", label: "gpt-5.1", note: "General purpose" },
     ],
   },
   {

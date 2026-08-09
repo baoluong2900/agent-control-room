@@ -2,13 +2,19 @@
 
 **Mức: Done · Effort: S**
 
-> **Đã triển khai.** `AgentCliDescriptor.structuredChat` là plain-data capability
-> (`args`, `resumeFlag`, optional id fields/output format), hiện được khai báo cho
-> Claude và Agy trong catalog. `commands.ts` không còn hardcode CLI id, đồng thời
-> loại extra args xung đột với flag mà structured chat sở hữu. Conversation id
-> parser hỗ trợ JSON đơn, JSONL, dữ liệu dở khi stream, và field tùy descriptor.
-> Renderer cảnh báo rõ CLI không có capability sẽ chạy từng prompt one-shot.
-> Test: `tests/structured-chat.test.ts`.
+> **Đã triển khai và mở rộng 2026-08-09.** `AgentCliDescriptor.structuredChat` là
+> plain-data capability (`args`, một trong `resumeFlag`/`resumeArgs`, optional id
+> fields/output format), hiện được verify thật cho Claude, Agy, Grok, OpenCode và
+> Codex. Codex dùng resume **subcommand** `exec resume <id>` thay vì giả làm một
+> flag; turn 2 qua `AgentProcessManager` giữ đúng `thread_id` và nhớ codeword turn
+> 1. Builder tự bỏ các option mà `codex exec resume` không chấp nhận, nên profile
+> có `--sandbox` không còn chạy turn 1 rồi chết ở turn 2. Parser chỉ lấy
+> `item.type=agent_message`, không nhầm shell output/error thành câu trả lời.
+> Structured transcript giữ stderr diagnostics lại khi stdout đã có answer (Codex
+> hiện xả 29–31 auth-refresh log lines mỗi turn), nhưng vẫn hiện stderr nếu run
+> thất bại không có answer. Test: `tests/structured-chat.test.ts`,
+> `tests/structured-chat-catalog.test.ts`, `tests/chat-transcript.test.ts`; live
+> harness `AGENTIC_CHAT_CLI=codex npm run verify:agents:chat` pass toàn bộ.
 
 Plan nhỏ và gọn. Giá trị chính không phải là thêm feature mà là **bỏ một cái bẫy**: hiện muốn thêm một CLI hỗ trợ chat phải sửa ba hàm ở một file không liên quan gì tới catalog.
 

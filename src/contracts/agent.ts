@@ -140,8 +140,28 @@ export interface AgentModelProbe {
 export interface AgentStructuredChat {
   /** Args that replace `baseArgs` for a chat run, e.g. `-p --output-format json`. */
   args: string[];
-  /** Flag that resumes an existing conversation; the id is appended after it. */
-  resumeFlag: string;
+  /**
+   * Flag that resumes an existing conversation; the id is appended after it.
+   * Mutually exclusive with `resumeArgs` — a capability declares exactly one.
+   */
+  resumeFlag?: string;
+  /**
+   * Argv that replaces `args` entirely on a resumed turn, for CLIs where resume
+   * is a **subcommand** rather than a flag: `codex exec resume <ID> <PROMPT>`
+   * cannot be expressed as `<flag> <id>` appended to the fresh-turn args.
+   *
+   * The literal token `{id}` is substituted with the conversation id. Declaring
+   * `resumeFlag` for such a CLI would build argv that silently starts a brand
+   * new session on every turn, which looks like an agent with amnesia.
+   */
+  resumeArgs?: string[];
+  /**
+   * Flags the resume path does not accept, stripped from option/extra argv when
+   * resuming. `codex exec` takes `--sandbox`/`--add-dir`/`--profile`/`--oss`;
+   * `codex exec resume` rejects them outright with `unexpected argument`, so a
+   * profile carrying one would work on turn 1 and fail on turn 2.
+   */
+  resumeDropsFlags?: string[];
   /**
    * Flag whose value is the prompt, for CLIs whose print flag requires its
    * argument (agy's `--print` errors with "flag needs an argument" otherwise).

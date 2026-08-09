@@ -76,15 +76,21 @@ test("storage report and cleanup are exposed and rendered in Diagnostics", async
   assert.match(panel, /Clean up now/);
 });
 
-test("Grok and OpenCode chat output parsing is imported by the actual chat panel", async () => {
-  const [panel, parser, catalog] = await Promise.all([
+test("Grok, OpenCode and codex chat output parsing reaches the actual chat panel", async () => {
+  const [panel, transcript, parser, catalog] = await Promise.all([
     read("src/renderer/agents/AgentChatPanel.tsx"),
+    read("src/renderer/agents/chat-transcript.ts"),
     read("src/renderer/agents/structured-chat-output.ts"),
     read("src/main/agents/catalog.ts"),
   ]);
 
-  assert.match(panel, /from ["']\.\/structured-chat-output["']/);
-  assert.match(panel, /extractStructuredAssistantText\(clean\)/);
+  // The panel renders through the transcript builder, which is what calls the
+  // parser. Both links have to hold, or the parser is dead code that still has
+  // green unit tests.
+  assert.match(panel, /from ["']\.\/chat-transcript["']/);
+  assert.match(panel, /buildChatMessages\(source, supportsStructuredChat\)/);
+  assert.match(transcript, /from ["']\.\/structured-chat-output["']/);
+  assert.match(transcript, /extractStructuredAssistantText\(clean\)/);
   assert.match(parser, /record\.part/);
   assert.match(parser, /split\("\\n"\)/, "JSONL output must be read line by line");
 
@@ -96,6 +102,14 @@ test("Grok and OpenCode chat output parsing is imported by the actual chat panel
   assert.match(opencodeBlock, /structuredChat:/);
   assert.match(opencodeBlock, /conversationIdFields: \["sessionID"\]/);
   assert.match(opencodeBlock, /outputFormat: "jsonl"/);
+
+  const codexBlock = catalog.slice(catalog.indexOf('id: "codex"'), catalog.indexOf('id: "gemini"'));
+  assert.match(codexBlock, /structuredChat:/);
+  assert.match(codexBlock, /resumeArgs: \["exec", "resume", "--json", "\{id\}"\]/);
+  assert.match(codexBlock, /conversationIdFields: \["thread_id"\]/);
+  // The answer lives in an `agent_message` item; without this branch the parser
+  // would surface a `command_execution`'s shell output as the reply.
+  assert.match(parser, /agent_message/);
 });
 
 test("the privileged window denies navigation and every Git handler checks the approved project path", async () => {

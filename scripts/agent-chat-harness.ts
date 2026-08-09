@@ -19,6 +19,40 @@ const check = (label: string, ok: boolean, detail = "") => {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const preview = (value: string) => value.trim().replace(/\s+/g, " ").slice(0, 120);
+
+/** All output of one stream for one run, in arrival order. */
+function collect(events: AgentEvent[], runId: string, type: "run:stdout" | "run:stderr"): string {
+  return events
+    .filter((event) => event.runId === runId && event.type === type)
+    .map((event) => event.message)
+    .join("");
+}
+
+/**
+ * Whether stdout is the CLI's structured envelope. Both shapes count: one JSON
+ * object for the whole run, and JSONL whose *first* line is an object — checking
+ * only `startsWith("{")` would already pass for JSONL, but asserting the first
+ * line parses catches a CLI that printed a `{` inside prose.
+ */
+function isStructured(stdout: string): boolean {
+  const firstLine = stdout.trim().split("\n", 1)[0]?.trim();
+  if (!firstLine?.startsWith("{")) return false;
+  try {
+    JSON.parse(firstLine);
+    return true;
+  } catch {
+    // A single pretty-printed object spans several lines, so fall back to the
+    // whole payload before calling it unstructured.
+    try {
+      JSON.parse(stdout.trim());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 async function waitFor(
   events: AgentEvent[],
   predicate: (event: AgentEvent) => boolean,
@@ -57,13 +91,17 @@ async function main() {
   check("turn 1 exited without a spawn error", Boolean(firstExit) && !firstError, firstError?.message ?? firstExit?.message ?? "timed out");
   check("turn 1 completed", firstExit?.status === "completed", String(firstExit?.status));
 
-  const firstOut = events
-    .filter((e) => e.runId === first.runId && (e.type === "run:stdout" || e.type === "run:stderr"))
-    .map((e) => e.message)
-    .join("");
-  check("turn 1 produced output", firstOut.trim().length > 0, firstOut.trim().slice(0, 120));
-  check("turn 1 output is JSON", firstOut.trim().startsWith("{"), firstOut.trim().slice(0, 60));
-  check("turn 1 answered the prompt", firstOut.includes("BANANA42"), firstOut.trim().slice(0, 120));
+  // stdout and stderr are kept apart on purpose. Merging them made the JSON check
+  // fail for a CLI that answers perfectly: codex writes "Reading additional input
+  // from stdin..." and one auth-refresh log line per HTTP call to stderr, so the
+  // combined text starts with prose and the harness reported a fault in the CLI
+  // that was actually a fault in the harness.
+  const firstOut = collect(events, first.runId, "run:stdout");
+  const firstErr = collect(events, first.runId, "run:stderr");
+  check("turn 1 produced output on stdout", firstOut.trim().length > 0, preview(firstOut));
+  check("turn 1 stdout is structured", isStructured(firstOut), preview(firstOut));
+  check("turn 1 answered the prompt", firstOut.includes("BANANA42"), preview(firstOut));
+  if (firstErr.trim()) console.log(`      note: ${firstErr.trim().split("\n").length} stderr line(s) — ${preview(firstErr)}`);
 
   const conversationId = firstExit?.conversationId ?? db.getAgentRun(first.runId)?.conversationId;
   check("conversation id captured for resume", Boolean(conversationId), conversationId ?? "none");
@@ -86,11 +124,17 @@ async function main() {
   const secondExit = await waitFor(events, (e) => e.runId === second.runId && e.type === "run:exit", 240_000);
   check("turn 2 completed", secondExit?.status === "completed", String(secondExit?.status));
 
-  const secondOut = events
-    .filter((e) => e.runId === second.runId && (e.type === "run:stdout" || e.type === "run:stderr"))
-    .map((e) => e.message)
-    .join("");
-  check("turn 2 remembered turn 1 (chat history really resumes)", secondOut.includes("BANANA42"), secondOut.trim().slice(0, 160));
+  const secondOut = collect(events, second.runId, "run:stdout");
+  check(
+    "turn 2 remembered turn 1 (chat history really resumes)",
+    secondOut.includes("BANANA42"),
+    preview(secondOut),
+  );
+  // The codeword has to come back on *stdout*, from the answer itself. Accepting
+  // stderr here would let an error message that happens to echo the prompt pass
+  // as proof that the conversation resumed.
+  const secondErr = collect(events, second.runId, "run:stderr");
+  if (secondErr.trim()) console.log(`      note: ${secondErr.trim().split("\n").length} stderr line(s) on turn 2`);
 
   db.close();
   console.log(failures.length === 0 ? "\nALL CHECKS PASSED" : `\n${failures.length} CHECK(S) FAILED: ${failures.join(", ")}`);

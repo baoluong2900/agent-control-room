@@ -2,16 +2,8 @@ import { Bot, CornerDownLeft, Loader2, Radio, Square, Terminal, X } from "lucide
 import type { AgentProfile, AgentStatus } from "@contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { resolveModuleSeed } from "./agent-modules";
-import { extractStructuredAssistantText } from "./structured-chat-output";
+import { buildChatMessages } from "./chat-transcript";
 import { statusLabel, type TerminalChunk, useAgentsStore } from "../stores/agents-store";
-
-type ChatMessage = {
-  id: string;
-  label: string;
-  stream: TerminalChunk["stream"];
-  text: string;
-  time: string;
-};
 
 /**
  * Stable empty array for the "no chunks yet" case. Returning a fresh `[]` from a
@@ -19,13 +11,6 @@ type ChatMessage = {
  * the equality check and re-renders the panel for other agents' output.
  */
 const EMPTY_CHUNKS: TerminalChunk[] = [];
-
-const streamLabels: Record<TerminalChunk["stream"], string> = {
-  event: "system",
-  stderr: "agent error",
-  stdin: "you",
-  stdout: "agent",
-};
 
 export function AgentChatPanel({
   cwd,
@@ -65,8 +50,8 @@ export function AgentChatPanel({
   const live = Boolean(session) || runStatusIsLive(runtime?.status);
   const messages = useMemo(() => {
     const source = profile.cliId === "shell" ? chunks : thread ?? chunks;
-    return buildChatMessages(source).slice(-80);
-  }, [chunks, profile.cliId, thread]);
+    return buildChatMessages(source, supportsStructuredChat).slice(-80);
+  }, [chunks, profile.cliId, supportsStructuredChat, thread]);
   const status = runtime?.status ?? session?.status ?? "idle";
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -229,80 +214,11 @@ export function AgentChatPanel({
   );
 }
 
-function buildChatMessages(chunks: TerminalChunk[]): ChatMessage[] {
-  const messages: ChatMessage[] = [];
-  let stdoutBuffer = "";
-  let stdoutTimestamp = "";
-  let stdoutIndex = 0;
-
-  const flushStdout = () => {
-    const clean = stripAnsi(stdoutBuffer).trim();
-    if (!clean) {
-      stdoutBuffer = "";
-      return;
-    }
-
-    const structured = extractStructuredAssistantText(clean);
-    const text = structured || clean;
-    for (const part of splitParagraphs(text)) {
-      messages.push({
-        id: `stdout-${stdoutTimestamp}-${stdoutIndex}`,
-        label: streamLabels.stdout,
-        stream: "stdout",
-        text: part,
-        time: shortTime(stdoutTimestamp),
-      });
-      stdoutIndex += 1;
-    }
-
-    stdoutBuffer = "";
-  };
-
-  for (const [index, chunk] of chunks.entries()) {
-    if (chunk.stream === "stdout") {
-      if (!stdoutBuffer) stdoutTimestamp = chunk.timestamp;
-      stdoutBuffer += chunk.message;
-      continue;
-    }
-
-    flushStdout();
-    const clean = stripAnsi(chunk.message).trim();
-    if (!clean) continue;
-    messages.push({
-      id: chunk.id || `${chunk.timestamp}-${index}`,
-      label: streamLabels[chunk.stream],
-      stream: chunk.stream,
-      text: clean,
-      time: shortTime(chunk.timestamp),
-    });
-  }
-
-  flushStdout();
-  return messages;
-}
-
 function fallbackPrompt(profile: AgentProfile, defaultPrompt: string): string {
   if (profile.cliId === "shell") {
     return `echo "${profile.name} chat session ready"`;
   }
   return profile.systemPrompt || defaultPrompt || "Start a concise interactive agent session.";
-}
-
-function shortTime(timestamp: string): string {
-  const time = new Date(timestamp);
-  if (!Number.isFinite(time.getTime())) return "";
-  return time.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
-function stripAnsi(value: string): string {
-  return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
-function splitParagraphs(value: string): string[] {
-  return value
-    .split(/\n{2,}/)
-    .map((part) => part.trim())
-    .filter(Boolean);
 }
 
 function runStatusIsLive(status?: AgentStatus): boolean {

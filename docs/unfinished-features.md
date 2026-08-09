@@ -378,10 +378,20 @@ Grok và OpenCode sau khi verify CLI thật, không đoán flag:
 - Renderer parser được tách sang `structured-chat-output.ts`, hiểu cả whole JSON và
   JSONL, bỏ qua `step_start/step_finish`, giữ thứ tự nhiều text event.
 
-Residual: Codex `exec resume` là **subcommand** (`codex exec resume <id> <prompt>`),
-không biểu diễn được bằng `resumeFlag`; máy này còn lỗi auth `access token could not
-be refreshed`, nên chưa thêm một catalog entry không verify được. Gemini/Kiro cũng
-chỉ mở chat khi có wire format + resume semantics được kiểm chứng thật.
+Update tiếp 2026-08-09: **Codex structured chat đã xong.** Auth trên máy đã hoạt
+động trở lại, nên `codex exec --json` và `codex exec resume <id> --json <prompt>`
+được verify thật qua cả CLI trực tiếp lẫn `AgentProcessManager`; turn 2 giữ nguyên
+`thread_id` và nhớ đúng codeword turn 1. Contract thêm plain-data `resumeArgs` với
+placeholder `{id}` để biểu diễn resume subcommand mà vẫn serialize qua IPC. Builder
+bỏ `--sandbox`/`--add-dir`/`--profile`/`--oss` khi resume vì chính
+`codex exec resume --help` không nhận chúng (truyền vào trả `unexpected argument`).
+Parser chỉ lấy `item.type=agent_message`, không nhầm `command_execution` output hay
+error item thành câu trả lời. Transcript mới giữ stderr diagnostics lại khi stdout
+đã có answer: Codex hiện ghi 29–31 dòng auth-refresh noise mỗi turn dù run vẫn
+completed; lỗi thật vẫn hiện khi không có answer. Live harness pass toàn bộ.
+
+Residual: Gemini/Kiro chỉ mở chat khi có wire format + resume semantics được kiểm
+chứng thật.
 
 ### A3 — Terminal log retention đã có
 
