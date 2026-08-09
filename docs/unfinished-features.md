@@ -393,6 +393,42 @@ completed; lỗi thật vẫn hiện khi không có answer. Live harness pass to
 Residual: Gemini/Kiro chỉ mở chat khi có wire format + resume semantics được kiểm
 chứng thật.
 
+Kiểm chứng Kiro 2026-08-10 (kết quả: **vẫn không đủ để mở chat**). `kiro-cli chat
+--no-interactive` chạy được một lượt và trả lời đúng, và `--resume-id <SESSION_ID>`
+**có** giữ ngữ cảnh — nhưng chỉ khi id đó là session Kiro tự sinh: truyền một UUID
+mới vào `--resume-id` thì lượt 2 trả lời "I don't have any codeword in my context",
+tức nó âm thầm mở session mới thay vì lỗi. Chặn thật là **không có cách lấy id đó từ
+stdout**: `-f json` chỉ áp dụng cho `--list-models`/`--list-sessions`, còn một lượt
+chat in ra prose thuần (`> OK` + dòng credits), không có field id nào để
+`extractConversationId()` bắt. Lấy id qua `chat --list-sessions -f json` sau mỗi lượt
+là một cơ chế khác hoàn toàn (poll ngoài process, khớp theo `updatedAt`/`title`, có
+race khi chạy nhiều agent cùng cwd) chứ không phải capability catalog-driven hiện có,
+nên Kiro vẫn để ở chế độ terminal/one-shot cho tới khi CLI phát session id ra stdout.
+
+### A4 — Đã sửa (2026-08-10): chat panel không gửi được tin và Clear không xoá gì
+
+Hai bug cùng gốc: `runtimes[profile.id]` chỉ được ghi bởi `runProfile`,
+`restartRun`, và `ingest`, nên nó **rỗng cho mọi profile ngay sau khi mở app**.
+
+1. `live` được suy ra bằng "không phải completed/failed/stopped", nên `undefined`
+   được đọc là *live*. Panel hiện pill "live" cho agent chưa từng chạy, và vì
+   structured chat disable Send khi live, người dùng gõ được nhưng **không bao giờ
+   bấm gửi được**. Chat panel vô dụng cho tới khi profile tình cờ được chạy từ
+   terminal view trước.
+2. Nút Clear gọi `clearTerminal(runId)` — xoá map `terminals` keyed theo *run*.
+   Nhưng bubble được render từ `chatThreads`, keyed theo *profile* (để thread sống
+   qua nhiều lượt, vì structured chat spawn process mới mỗi tin). Clear vì thế xoá
+   view người dùng không xem và để lại nguyên transcript trên màn hình.
+
+Fix: logic tách sang `src/renderer/agents/chat-session-state.ts` (`chatRunIsLive`,
+`chatSendDisabled`) để assert trực tiếp thay vì qua cửa sổ Electron render; `idle`
+được xếp vào nhóm settled vì nó là default của store, không phải run đang chạy; và
+`clearChatThread(profileId)` xoá cả `chatThreads` lẫn `terminals` của run đó.
+
+Verified: `npm test` 510/510 (baseline trước thay đổi: 458). Cả hai test được chứng
+minh load-bearing bằng cách khôi phục logic cũ trong từng file — 5 test chuyển sang
+fail. Test: `tests/chat-session-state.test.ts`, `tests/chat-clear-thread.test.ts`.
+
 ### A3 — Terminal log retention đã có
 
 Status update 2026-08-04: terminal log storage now has per-message truncation with a visible marker, per-run row pruning, and startup cleanup for old finished-run logs. Long-running noisy agents no longer grow SQLite without bound.
