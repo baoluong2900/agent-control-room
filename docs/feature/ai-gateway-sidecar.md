@@ -1,6 +1,6 @@
 # 15 — AI gateway / sidecar: tài liệu mô tả router nhưng runtime chưa có server
 
-**Trạng thái: Phase 0, 1, 2 Done · Mức: P3 · Effort: XL · Còn lại: phase 3/4/5 cần quyết định sản phẩm**
+**Trạng thái: Phase 0, 1, 2, 3 Done · Mức: P3 · Effort: XL · Còn lại: phase 4/5 cần quyết định sản phẩm**
 
 Phase 0 đã xong (2026-08-06 verify): `docs/aiagnet.md` đã có banner
 `Status: proposal / future architecture` ở đầu file, README không claim `/v1`
@@ -220,7 +220,100 @@ thật có trên máy) — spawn được, `/health` trả **HTTP 200**, capture
 startup của nó, **không leak key**, stop mất 72ms, và sau đó `lsof` cho thấy không có
 gì giữ port 8646, `pgrep` không còn `hermes proxy` nào.
 
-## Vì sao phase 3, 4, 5 vẫn chưa làm
+## Phase 3 đã implement (2026-08-10)
+
+`/v1/chat/completions` streaming, cancellation, error mapping. Lý do hoãn cũ —
+"adapt provider nào trước" — **không còn là câu hỏi mở**: provider connection đã có
+`baseUrl` + credential trong vault, `resolveConnectionBaseUrl` đã resolve endpoint, và
+`custom-api`/`hermes-agent` **là** endpoint OpenAI-compatible. Không cần quyết định
+sản phẩm nào để adapt cái đầu tiên; nó đã được cấu hình sẵn.
+
+| File | Vai trò |
+| --- | --- |
+| `src/contracts/gateway-chat.ts` | Contract. `requestId` do **caller** cấp, không phải trả về |
+| `src/main/gateway/gateway-chat-client.ts` | HTTP + SSE thuần, `fetch` injectable |
+| `src/main/gateway/gateway-chat-service.ts` | Vault, chọn connection, registry cancel |
+| `src/renderer/gateway/gateway-chat-ui.ts` | Copy + state machine, test không cần DOM |
+| `src/renderer/gateway/GatewayChatPanel.tsx` | UI trong Integrations rail |
+| `tests/gateway-chat-client.test.ts` (23) · `tests/gateway-chat-service.test.ts` (16) | |
+
+### Cancellation là lý do contract có shape này
+
+Một CLI run bị dừng bằng cách signal pid. Một HTTP stream **không có pid**, nên id
+phải là handle — và nó do renderer mint **trước khi** request rời đi. Nếu id chỉ về
+cùng completion thì mấy giây đầu (trước token đầu tiên) sẽ không thể cancel, đúng
+khoảng thời gian user hay bấm Stop nhất.
+
+Cancel trả về **partial text** như một completion `ok` với `cancelled: true`, không
+phải error. Những token đó đã được sinh ra và đã bị bill; bỏ đi vừa là UI tệ hơn vừa
+là bản ghi không trung thực.
+
+### Một bug thật, chỉ tìm ra bằng gateway thật
+
+Pool API (`:5100`) trả **HTTP 200 + `content-type: text/event-stream`** nhưng đặt lỗi
+**bên trong** stream:
+
+```
+data: {"error":{"message":"No healthy upstream deployment was available.",...,"code":"upstream_error"}}
+data: [DONE]
+```
+
+Client bản đầu parse cái này thành completion **thành công với text rỗng** — tức báo
+một request chạy được mà chẳng sinh ra gì. Đây đúng loại "side effect thành công
+nhưng bản ghi nói dối". Toàn bộ 34 unit test lúc đó đều xanh vì stub nào cũng đặt lỗi
+ở status line.
+
+Sửa: `parseErrorEnvelope` dùng chung cho **cả hai** parser (stream và non-stream, vì
+cả hai gặp đúng cái bẫy này), và `classifyStreamErrorCode` map `code` sang kind — vì
+không có HTTP status để dựa vào, một auth failure gửi kiểu này vẫn phải chỉ user tới
+Settings chứ không phải nút Retry. 5 test mới, một trong đó dùng nguyên payload thật
+của gateway.
+
+### Verify với server thật
+
+Không chỉ với fake. Streaming + cancel chống mock provider `:5199` mà Pool API front
+(SSE thật, chunk thật, không viết ra để làm test pass):
+
+| Hạng mục | Kết quả |
+| --- | --- |
+| Streaming | **10 delta callback** (thật sự incremental), TTFT 31ms, usage 19 token |
+| Non-streamed | text đủ, `ttftMs: null` (không đo thì không bịa số 0) |
+| Cancel giữa stream | `cancelled: true`, **93 ký tự partial giữ lại**, registry sạch |
+| 401 thật (Pool API `:5100`) | `unauthorized` + statusCode 401 |
+| In-stream error thật | `server-error` kèm nguyên văn của gateway |
+| Port chết `:5399` | `unreachable` |
+| Credential | **không xuất hiện** trong target list, completion, hay event nào |
+
+### Ma trận phân biệt (chứng minh test có "răng")
+
+Không sabotage source; drive code thật bằng input phải xử lý **khác nhau**:
+
+- **Connection eligibility**: 9 case → hermes/custom-with-baseUrl/unverified/explicit-id
+  routed; custom-không-baseUrl, claude-code, expired, disconnected, explicit-id-sai
+  refused. Nếu guard là no-op thì cả 9 dòng giống nhau.
+- **HTTP status**: 401/403 → `unauthorized`; 402 → nhắc credit; 400/429/500/503 →
+  `server-error`. Ba nhóm khác nhau.
+- **Cancel vs timeout vs transport**: `cancelled` / `unreachable (did not finish in
+  time)` / `unreachable (fetch failed)` — ba kind riêng, vì user bấm Stop không phải
+  là một failure.
+- **SSE reassembly**: cùng một frame chia 1 chunk, 2 chunk, và **54 chunk từng byte**
+  → cả ba ra `"ABCDEFGH"`. Parser giả định một frame/chunk sẽ mất token ở case 54.
+
+### Phase 4/5 vẫn chưa làm, và vì sao đó là quyết định chứ không phải effort
+
+Phase 3 **không** kéo được phase 4/5 theo. `sendChat` gửi credential mà connection đã
+lưu; nó không refresh token, không rotate, không đăng nhập. Phase 4 (multi-account
+OAuth) cần đúng những thứ `done/provider-connection-truth.md` cố ý loại khỏi scope.
+Phase 5 (fallback routing) có một câu hỏi bảo mật thật: fallback sang provider khác
+nghĩa là dữ liệu rời máy tới vendor khác — cần approval của user hay không? Đó là câu
+chủ sản phẩm trả lời, không phải agent tự quyết.
+
+Còn một residual **của phase 3** đúng là quyết định: workflow step hiện spawn CLI, và
+cho step chọn gateway transport cần abstraction "model invocation" chung (mục 4 trong
+Component đề xuất) — tức đổi shape của step definition, thứ ảnh hưởng tới schema và
+UI builder. Transport đã có và đã verify; nối nó vào workflow step là một plan riêng.
+
+## Vì sao phase 4, 5 vẫn chưa làm
 
 Không phải nợ kỹ thuật bị bỏ quên — chúng cần quyết định sản phẩm.
 
@@ -239,10 +332,7 @@ câu hỏi sản phẩm: có bundle binary của router hay bắt user tự cài
 hay ngẫu nhiên, và ai chịu trách nhiệm vòng đời process đó khi app đóng. Đó là những
 câu chỉ chủ sản phẩm trả lời được, không phải thứ agent nên tự quyết.
 
-- **Phase 3 (`/v1` streaming)**: hạ tầng đã xong. Còn lại là câu hỏi sản phẩm:
-  adapt provider nào trước, và **cancellation map vào workflow step như thế nào** —
-  hiện step spawn CLI, còn gateway path là HTTP stream, nên cần abstraction
-  "model invocation" chung (mục 4 trong Component đề xuất).
+- **Phase 3 (`/v1` streaming)**: **đã làm** — xem section riêng bên dưới.
 - **Phase 4 (multi-account OAuth)**: cần đúng những thứ `provider-connection-truth.md`
   đã cố ý loại khỏi scope.
 - **Phase 5 (routing/fallback)**: là một sản phẩm riêng — cần UX rõ trước, và có câu
@@ -266,8 +356,10 @@ tức là *trỏ tới* một router bên ngoài, không phải tự chạy mộ
       (Verify với router thật: stop 72ms, port 8646 free, không process sót.)
 - [x] Gateway chỉ bind `127.0.0.1`, có local API key, không leak secret vào logs.
       (Key strip khỏi log, có test với sidecar cố ý in key ra.)
-- [ ] `/v1/chat/completions` stream hoạt động cho ít nhất một provider.
-- [ ] Cancel request từ workflow/agent dừng stream thật.
+- [x] `/v1/chat/completions` stream hoạt động cho ít nhất một provider.
+      (Verify với server thật: 10 delta callback, TTFT 31ms, usage 19 token.)
+- [x] Cancel request từ workflow/agent dừng stream thật.
+      (Cancel trên socket thật giữ lại 93 ký tự partial, registry sạch sau đó.)
 - [x] Diagnostics biết sidecar healthy/unhealthy và action sửa.
       (Ba trạng thái: crashed / running-nhưng-không-answer / healthy.)
 - [ ] Fallback policy rõ ràng và không gửi dữ liệu sang provider khác ngoài ý người dùng.

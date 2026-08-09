@@ -482,7 +482,30 @@ Việc nên làm:
 
 1. Ngắn hạn: đổi đầu `docs/aiagnet.md` thành “proposal / future architecture”, và link ngược sang tài liệu này để phân biệt trạng thái hiện tại với hướng làm.
 2. Trung hạn: nếu muốn giữ lời hứa gateway, thêm service quản lý sidecar: locate/download binary, spawn/stop theo app lifecycle, health check, local API key, log/port conflict handling.
-3. Dài hạn: thêm provider account model thật cho router: OAuth/device flow, refresh token, quota/rate-limit tracking, fallback policy, và adapter giữa workflow/agent task với `/v1/chat/completions` streaming.
+3. Dài hạn: thêm provider account model thật cho router: OAuth/device flow, refresh token, quota/rate-limit tracking, và fallback policy.
+
+### Status update 2026-08-10 — mục 2 và phần streaming của mục 3 đã xong
+
+Bằng chứng ở trên viết ở commit cũ và **không còn đúng** hai chỗ, nên đừng đọc nó như
+trạng thái hiện tại:
+
+- **Mục 2 (sidecar manager) đã làm**: `src/main/gateway/sidecar-manager.ts` — spawn/stop
+  qua `terminateProcessTree` (không để orphan giữ port), port conflict báo lỗi thay vì
+  âm thầm đổi port, log cap 500 dòng, local API key strip khỏi log, `/health` probe báo
+  ba trạng thái trong Diagnostics. Verify với router thật (`hermes proxy start`).
+- **Phần `/v1/chat/completions` streaming của mục 3 đã làm**:
+  `src/main/gateway/gateway-chat-{client,service}.ts` + `GatewayChatPanel.tsx`. Streaming
+  SSE, cancel giữa stream giữ lại partial text, error mapping bốn kind. Verify với server
+  thật: 10 delta callback, TTFT 31ms, cancel giữ 93 ký tự.
+- **Điểm ở dòng `src/main/ipc/register-ipc.ts` cũng lạc hậu**: giờ có
+  `gateway:chat-targets` / `gateway:chat-send` / `gateway:chat-cancel` và push event
+  `gateway:chat-event`, tức app **không còn** chỉ spawn CLI — nó có transport thứ hai.
+
+Còn lại của mục 3 đúng là chưa làm, và là quyết định sản phẩm chứ không phải effort:
+multi-account OAuth/refresh token (phase 4), quota tracking, và fallback policy (phase 5
+— fallback sang provider khác nghĩa là dữ liệu rời máy tới vendor khác, cần user
+approval hay không là câu chủ sản phẩm trả lời). Chi tiết trong
+`docs/feature/ai-gateway-sidecar.md`.
 
 ## 8. Diagnostics / Integrations / Analytics: chủ yếu là health dashboard, chưa phải control plane đầy đủ
 

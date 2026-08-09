@@ -37,6 +37,15 @@ trigger giờ đều có runner; `unsupportedTriggerCopy` rỗng** và có test 
 trigger không runner. Backlog mở còn lại đúng những thứ cần bạn quyết định:
 phase 1/3/4/5 của plan 15 và OAuth thật. `npm test` 313/313, `npm run build` pass.
 
+Pass **2026-08-10**: plan 15 **phase 3** landed — `/v1/chat/completions` streaming,
+cancellation, và error mapping (`src/main/gateway/gateway-chat-{client,service}.ts`,
+`src/renderer/gateway/GatewayChatPanel.tsx`). Lý do hoãn cũ ("adapt provider nào
+trước") hoá ra đã được trả lời sẵn: provider connection đã mang `baseUrl` + credential
+trong vault. Verify với server thật, không chỉ fake: 10 delta callback, TTFT 31ms,
+cancel giữ 93 ký tự partial. **Tìm ra một bug thật mà 34 unit test không thấy** —
+gateway trả HTTP 200 `text/event-stream` với lỗi *bên trong* stream, và client bản đầu
+báo đó là completion thành công với text rỗng. `npm test` 510/510.
+
 ## Cách đọc một file plan
 
 Mỗi plan có cùng cấu trúc:
@@ -56,7 +65,7 @@ Thứ tự này tính theo **giá trị / rủi ro**, không phải theo độ k
 
 | # | Plan | Mức | Effort | Vấn đề một dòng |
 | --- | --- | --- | --- | --- |
-| 15 | [ai-gateway-sidecar.md](ai-gateway-sidecar.md) | P3 | XL | Phase 0/1/2 xong (sidecar lifecycle + `/health` + Diagnostics, verify với router thật). Phase 3/4/5 cần quyết định sản phẩm |
+| 15 | [ai-gateway-sidecar.md](ai-gateway-sidecar.md) | P3 | XL | Phase 0/1/2/3 xong (sidecar lifecycle + `/health` + `/v1` streaming/cancel, verify với server thật). Phase 4/5 cần quyết định sản phẩm |
 
 ## Completed archive
 
@@ -97,8 +106,11 @@ cần inbound HTTP và credential provider.
 
 **Sprint 4+ — nâng chất lượng lõi.** Plan 05 đã xong cả 5 phase (alias, progress/cancel,
 incremental, AST, ranked search) và plan 11 đã xong cả 3 phase (CLI availability, copy
-trung thực, AI mode có fallback). Plan 15 vẫn cần quyết định sản phẩm trước khi viết code;
-acceptance ngắn hạn của nó (dán nhãn tài liệu) đã đạt.
+trung thực, AI mode có fallback). Plan 15 giờ xong phase 0–3: app quản lý được sidecar,
+báo health đúng, và **gửi prompt qua gateway với streaming + cancel thật**. Chỉ phase 4
+(multi-account OAuth) và 5 (fallback routing) còn cần quyết định sản phẩm — cùng một
+residual của phase 3: cho workflow step chọn gateway transport thay vì spawn CLI đòi đổi
+shape của step definition, tức là plan riêng.
 
 ## Ràng buộc chung cho mọi plan
 
