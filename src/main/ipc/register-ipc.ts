@@ -226,11 +226,11 @@ export function registerIpcHandlers({
   ipcMain.handle("git:stash-push", (_event, cwd: string, message?: string, includeUntracked?: boolean) =>
     createGitStash(approvedGitCwd(cwd), message, includeUntracked),
   );
-  ipcMain.handle("git:stash-apply", (_event, cwd: string, ref: string, keep?: boolean) =>
-    applyGitStash(approvedGitCwd(cwd), ref, keep),
+  ipcMain.handle("git:stash-apply", (_event, cwd: string, ref: string, expectedOid: string, keep?: boolean) =>
+    applyGitStash(approvedGitCwd(cwd), ref, expectedOid, keep),
   );
-  ipcMain.handle("git:stash-drop", (_event, cwd: string, ref: string, expectedMessage?: string) =>
-    dropGitStash(approvedGitCwd(cwd), ref, expectedMessage),
+  ipcMain.handle("git:stash-drop", (_event, cwd: string, ref: string, expectedOid: string) =>
+    dropGitStash(approvedGitCwd(cwd), ref, expectedOid),
   );
 
   ipcMain.handle("knowledge:get", (_event, projectPath: string) => knowledgeService.get(projectPath));

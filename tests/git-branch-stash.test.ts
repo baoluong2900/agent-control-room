@@ -156,7 +156,7 @@ test("stash push stores tracked work, clears the tree, and restores on apply", a
   assert.deepEqual(detail.files, ["committed.txt"]);
   assert.match(detail.patch, /stashed edit/, "the patch shows what would be restored");
 
-  const applied = await applyGitStash(dir, "stash@{0}", true);
+  const applied = await applyGitStash(dir, entries[0].ref, entries[0].oid, true);
   assert.equal(applied.ok, true, applied.message);
   assert.equal(fs.readFileSync(file, "utf8"), "stashed edit\n", "apply restores the edit");
   assert.equal((await readGitStashes(dir)).length, 1, "apply keeps the entry on the stack");
@@ -166,8 +166,9 @@ test("pop consumes the entry that apply would have kept", async () => {
   const dir = initRepo("stash-pop");
   fs.writeFileSync(path.join(dir, "committed.txt"), "popped\n");
   await createGitStash(dir, "wip");
+  const [entry] = await readGitStashes(dir);
 
-  const popped = await applyGitStash(dir, "stash@{0}", false);
+  const popped = await applyGitStash(dir, entry.ref, entry.oid, false);
 
   assert.equal(popped.ok, true, popped.message);
   assert.equal(fs.readFileSync(path.join(dir, "committed.txt"), "utf8"), "popped\n");
@@ -203,7 +204,8 @@ test("untracked-only changes need the include-untracked flag, and it works", asy
   assert.ok(detail.files.includes("fresh.txt"), "the preview includes the untracked file that would be restored");
   assert.match(detail.patch, /new file mode/, "the untracked file has a real patch in the preview");
 
-  const restored = await applyGitStash(dir, "stash@{0}", false);
+  const [entry] = await readGitStashes(dir);
+  const restored = await applyGitStash(dir, entry.ref, entry.oid, false);
   assert.equal(restored.ok, true, restored.message);
   assert.equal(fs.readFileSync(path.join(dir, "fresh.txt"), "utf8"), "new file\n");
 });
@@ -214,8 +216,9 @@ test("restoring a stash over a dirty tree is refused", async () => {
   fs.writeFileSync(file, "first edit\n");
   await createGitStash(dir, "first");
   fs.writeFileSync(file, "second edit\n");
+  const [entry] = await readGitStashes(dir);
 
-  const result = await applyGitStash(dir, "stash@{0}", true);
+  const result = await applyGitStash(dir, entry.ref, entry.oid, true);
 
   assert.equal(result.ok, false);
   assert.match(result.message, /clean tree/);
@@ -229,8 +232,9 @@ test("restoring a stash over an untracked file is refused too", async () => {
   fs.writeFileSync(fresh, "from stash\n");
   await createGitStash(dir, "untracked", true);
   fs.writeFileSync(fresh, "current local file\n");
+  const [entry] = await readGitStashes(dir);
 
-  const result = await applyGitStash(dir, "stash@{0}", true);
+  const result = await applyGitStash(dir, entry.ref, entry.oid, true);
 
   assert.equal(result.ok, false);
   assert.match(result.message, /clean tree/);
@@ -244,7 +248,7 @@ test("an unknown or malformed stash ref is refused instead of passed to git", as
   await createGitStash(dir, "only entry");
 
   for (const ref of ["stash@{7}", "refs/stash", "stash@{0}; rm -rf /", "HEAD", ""]) {
-    const applied = await applyGitStash(dir, ref, true);
+    const applied = await applyGitStash(dir, ref, "0".repeat(40), true);
     assert.equal(applied.ok, false, `${JSON.stringify(ref)} should be refused`);
     const detail = await readGitStashDetail(dir, ref);
     assert.ok(detail.error, `${JSON.stringify(ref)} should report an error`);
@@ -253,7 +257,7 @@ test("an unknown or malformed stash ref is refused instead of passed to git", as
   assert.equal((await readGitStashes(dir)).length, 1, "the real entry is untouched");
 });
 
-test("drop refuses when the stack shifted under the message the UI showed", async () => {
+test("drop refuses when the stack shifted under the OID the UI showed", async () => {
   const dir = initRepo("stash-drop-guard");
   const file = path.join(dir, "committed.txt");
 
@@ -268,14 +272,41 @@ test("drop refuses when the stack shifted under the message the UI showed", asyn
   assert.match(entries[0].message, /newer work/);
   assert.match(entries[1].message, /older work/);
 
-  const stale = await dropGitStash(dir, "stash@{0}", "On main: older work");
+  const stale = await dropGitStash(dir, "stash@{0}", entries[1].oid);
   assert.equal(stale.ok, false);
-  assert.match(stale.message, /stash stack shifted/);
+  assert.match(stale.message, /Stash entry changed/);
   assert.equal((await readGitStashes(dir)).length, 2, "nothing was dropped");
 
-  const dropped = await dropGitStash(dir, "stash@{0}", entries[0].message);
+  const dropped = await dropGitStash(dir, "stash@{0}", entries[0].oid);
   assert.equal(dropped.ok, true, dropped.message);
   const remaining = await readGitStashes(dir);
   assert.equal(remaining.length, 1);
   assert.match(remaining[0].message, /older work/, "the entry the user meant to keep survived");
+});
+
+test("pop refuses a shifted ref instead of applying and consuming another stash", async () => {
+  const dir = initRepo("stash-pop-shift");
+  const file = path.join(dir, "committed.txt");
+
+  fs.writeFileSync(file, "older\n");
+  await createGitStash(dir, "older work");
+  const [rendered] = await readGitStashes(dir); // UI saw this as stash@{0}.
+
+  fs.writeFileSync(file, "newer\n");
+  await createGitStash(dir, "newer work"); // The rendered OID is now stash@{1}.
+
+  const stale = await applyGitStash(dir, rendered.ref, rendered.oid, false);
+  assert.equal(stale.ok, false);
+  assert.match(stale.message, /Stash entry changed/);
+  assert.equal(fs.readFileSync(file, "utf8"), "base\n", "neither stash was applied");
+  assert.equal((await readGitStashes(dir)).length, 2, "neither stash was consumed");
+
+  const shifted = (await readGitStashes(dir)).find((entry) => entry.oid === rendered.oid);
+  assert.ok(shifted, "the immutable OID finds the same stash at its new ref");
+  const popped = await applyGitStash(dir, shifted.ref, shifted.oid, false);
+  assert.equal(popped.ok, true, popped.message);
+  assert.equal(fs.readFileSync(file, "utf8"), "older\n");
+  const remaining = await readGitStashes(dir);
+  assert.equal(remaining.length, 1);
+  assert.match(remaining[0].message, /newer work/, "only the intended older stash was consumed");
 });

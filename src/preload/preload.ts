@@ -109,9 +109,10 @@ const api: AgenticDesktopApi = {
     stashDetail: (cwd: string, ref: string) => ipcRenderer.invoke("git:stash-detail", cwd, ref),
     stashPush: (cwd: string, message?: string, includeUntracked?: boolean) =>
       ipcRenderer.invoke("git:stash-push", cwd, message, includeUntracked),
-    stashApply: (cwd: string, ref: string, keep?: boolean) => ipcRenderer.invoke("git:stash-apply", cwd, ref, keep),
-    stashDrop: (cwd: string, ref: string, expectedMessage?: string) =>
-      ipcRenderer.invoke("git:stash-drop", cwd, ref, expectedMessage),
+    stashApply: (cwd: string, ref: string, expectedOid: string, keep?: boolean) =>
+      ipcRenderer.invoke("git:stash-apply", cwd, ref, expectedOid, keep),
+    stashDrop: (cwd: string, ref: string, expectedOid: string) =>
+      ipcRenderer.invoke("git:stash-drop", cwd, ref, expectedOid),
   },
   knowledge: {
     get: (projectPath: string) => ipcRenderer.invoke("knowledge:get", projectPath),

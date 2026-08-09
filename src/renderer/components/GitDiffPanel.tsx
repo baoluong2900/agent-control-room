@@ -248,14 +248,16 @@ export function GitDiffPanel({
             entries={stashes}
             includeUntracked={includeUntracked}
             message={stashMessage}
-            onApply={(entry, keep) => void runGitAction(() => window.agentic.git.stashApply(project!.path, entry.ref, keep))}
+            onApply={(entry, keep) =>
+              void runGitAction(() => window.agentic.git.stashApply(project!.path, entry.ref, entry.oid, keep))
+            }
             onDrop={(entry) => {
               // Drop has no ordinary undo. Name the exact stack ref and message in
               // the confirmation, then send that message to the backend as a
               // second stack-shift guard before git is allowed to delete it.
               const confirmed = window.confirm(`Drop ${entry.ref}?\n\n${entry.message}\n\nThis cannot be undone.`);
               if (confirmed) {
-                void runGitAction(() => window.agentic.git.stashDrop(project!.path, entry.ref, entry.message));
+                void runGitAction(() => window.agentic.git.stashDrop(project!.path, entry.ref, entry.oid));
               }
             }}
             onIncludeUntrackedChange={setIncludeUntracked}

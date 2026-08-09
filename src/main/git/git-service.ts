@@ -218,20 +218,21 @@ export async function readGitStashes(cwd: string): Promise<GitStashEntry[]> {
   const repository = await ensureRepository(cwd);
   if (!repository.ok) return [];
 
-  const result = await git(cwd, ["stash", "list", "--format=%gd%x1f%gs%x1f%ai"]);
+  const result = await git(cwd, ["stash", "list", "--format=%gd%x1f%H%x1f%gs%x1f%ai"]);
   if (!result.ok || !result.output.trim()) return [];
 
   return result.output
     .split(/\r?\n/)
     .filter((line) => line.trim())
     .map((line, index) => {
-      const [ref, subject, date] = line.split("\x1f");
+      const [ref, oid, subject, date] = line.split("\x1f");
       // `%gs` reads `WIP on main: 1a2b3c subject` or `On main: message`; the
       // branch is worth its own field because it is how a user decides whether a
       // stash is even relevant to where they are now.
       const branchMatch = /^(?:WIP on|On) ([^:]+):/.exec(subject ?? "");
       return {
         ref: ref?.trim() || `stash@{${index}}`,
+        oid: oid?.trim() ?? "",
         index,
         message: (subject ?? "").trim(),
         branch: branchMatch?.[1]?.trim(),
@@ -243,20 +244,21 @@ export async function readGitStashes(cwd: string): Promise<GitStashEntry[]> {
 /** The patch a stash would restore, so the UI can show it before applying. */
 export async function readGitStashDetail(cwd: string, ref: string): Promise<GitStashDetail> {
   const repository = await ensureRepository(cwd);
-  if (!repository.ok) return { ref, patch: "", files: [], error: repository.output };
+  if (!repository.ok) return { ref, oid: "", patch: "", files: [], error: repository.output };
 
-  const resolved = await resolveStashRef(cwd, ref);
-  if (!resolved) return { ref, patch: "", files: [], error: "Unknown stash entry" };
+  const resolved = await resolveStashEntry(cwd, ref);
+  if (!resolved) return { ref, oid: "", patch: "", files: [], error: "Unknown stash entry" };
 
   const [patch, files] = await Promise.all([
     // Include untracked entries too: a stash created with `--include-untracked`
     // must preview every file it would restore, not only its tracked half.
-    git(cwd, ["stash", "show", "--include-untracked", "--patch", resolved]),
-    git(cwd, ["stash", "show", "--include-untracked", "--name-only", resolved]),
+    git(cwd, ["stash", "show", "--include-untracked", "--patch", resolved.oid]),
+    git(cwd, ["stash", "show", "--include-untracked", "--name-only", resolved.oid]),
   ]);
 
   return {
-    ref: resolved,
+    ref: resolved.ref,
+    oid: resolved.oid,
     patch: patch.ok ? patch.output : "",
     files: files.ok ? files.output.split(/\r?\n/).filter((line) => line.trim()) : [],
     error: patch.ok ? undefined : patch.output || "Unable to read stash",
@@ -302,12 +304,17 @@ export async function createGitStash(
  * Refuses on a dirty tree: restoring over local edits either conflicts, or
  * silently mixes two sets of changes into one indistinguishable diff.
  */
-export async function applyGitStash(cwd: string, ref: string, keep = true): Promise<GitOperationResult> {
+export async function applyGitStash(
+  cwd: string,
+  ref: string,
+  expectedOid: string,
+  keep = true,
+): Promise<GitOperationResult> {
   const repository = await ensureRepository(cwd);
   if (!repository.ok) return operationResult(false, repository.output, cwd);
 
-  const resolved = await resolveStashRef(cwd, ref);
-  if (!resolved) return operationResult(false, "Unknown stash entry", cwd);
+  const resolved = await resolveExpectedStash(cwd, ref, expectedOid);
+  if (!resolved) return operationResult(false, "Stash entry changed. Refresh before restoring it.", cwd);
 
   // A stash can contain untracked files too. Restoring it over an untracked file
   // with the same path either fails late or risks mixing two unrelated work sets,
@@ -318,35 +325,39 @@ export async function applyGitStash(cwd: string, ref: string, keep = true): Prom
     return operationResult(false, "Restore onto a clean tree: commit or stash the current changes first.", cwd);
   }
 
-  const result = await git(cwd, ["stash", keep ? "apply" : "pop", resolved]);
+  // Always apply by immutable object id. `git stash pop stash@{n}` can consume a
+  // different entry if the stack shifts between render and click. For pop, drop
+  // only after the apply succeeds, and re-find that same OID at its current ref.
+  const result = await git(cwd, ["stash", "apply", resolved.oid]);
+  if (!result.ok) return operationResult(false, result.output || `Unable to apply ${resolved.ref}`, cwd);
+
+  if (!keep) {
+    const current = (await readGitStashes(cwd)).find((entry) => entry.oid === resolved.oid);
+    if (!current) {
+      return operationResult(true, `Applied ${resolved.ref}; its stack entry was already removed.`, cwd);
+    }
+    const dropped = await git(cwd, ["stash", "drop", current.ref]);
+    if (!dropped.ok) {
+      return operationResult(true, `Applied ${resolved.ref}, but could not remove its stash entry: ${dropped.output}`, cwd);
+    }
+  }
   return operationResult(
-    result.ok,
-    result.ok
-      ? `${keep ? "Applied" : "Popped"} ${resolved}`
-      : result.output || `Unable to ${keep ? "apply" : "pop"} ${resolved}`,
+    true,
+    `${keep ? "Applied" : "Popped"} ${resolved.ref}`,
     cwd,
   );
 }
 
 /**
- * Drops one stash entry. Irreversible in practice, so the caller must pass the
- * message it showed the user; a mismatch means the stack shifted underneath and
- * the drop is refused rather than deleting a different entry.
+ * Drops one stash entry. Irreversible in practice, so the caller must pass its
+ * immutable commit OID; a ref/OID mismatch means the stack shifted and is refused.
  */
-export async function dropGitStash(cwd: string, ref: string, expectedMessage?: string): Promise<GitOperationResult> {
+export async function dropGitStash(cwd: string, ref: string, expectedOid: string): Promise<GitOperationResult> {
   const repository = await ensureRepository(cwd);
   if (!repository.ok) return operationResult(false, repository.output, cwd);
 
-  const entries = await readGitStashes(cwd);
-  const entry = entries.find((candidate) => candidate.ref === ref);
-  if (!entry) return operationResult(false, "Unknown stash entry", cwd);
-  if (expectedMessage !== undefined && entry.message !== expectedMessage) {
-    return operationResult(
-      false,
-      `${ref} now holds "${entry.message}". Refresh before dropping — the stash stack shifted.`,
-      cwd,
-    );
-  }
+  const entry = await resolveExpectedStash(cwd, ref, expectedOid);
+  if (!entry) return operationResult(false, "Stash entry changed. Refresh before dropping it.", cwd);
 
   const result = await git(cwd, ["stash", "drop", ref]);
   return operationResult(result.ok, result.ok ? `Dropped ${ref}` : result.output || `Unable to drop ${ref}`, cwd);
@@ -363,11 +374,18 @@ async function hasUncommittedChanges(cwd: string): Promise<boolean> {
 }
 
 /** Confirms a `stash@{n}` ref exists right now, rather than trusting the caller. */
-async function resolveStashRef(cwd: string, ref: string): Promise<string | null> {
+async function resolveStashEntry(cwd: string, ref: string): Promise<GitStashEntry | null> {
   const trimmed = ref.trim();
   if (!/^stash@\{\d+\}$/.test(trimmed)) return null;
   const entries = await readGitStashes(cwd);
-  return entries.some((entry) => entry.ref === trimmed) ? trimmed : null;
+  return entries.find((entry) => entry.ref === trimmed) ?? null;
+}
+
+/** Both the shifting ref and immutable object id must identify the same entry. */
+async function resolveExpectedStash(cwd: string, ref: string, expectedOid: string): Promise<GitStashEntry | null> {
+  if (!/^[0-9a-f]{40,64}$/i.test(expectedOid.trim())) return null;
+  const entry = await resolveStashEntry(cwd, ref);
+  return entry?.oid === expectedOid.trim() ? entry : null;
 }
 
 /**

@@ -231,8 +231,9 @@ Status update 2026-08-04:
 Update 2026-08-09: **branch + stash đã xong.** Git Workspace có thêm hai tab:
 Branches (list/current/upstream, create + switch) và Stashes (push có option include
 untracked, inspect patch, apply/pop/drop). Checkout từ chối mang tracked edits sang
-branch khác; restore stash yêu cầu tree sạch hoàn toàn; drop gửi lại message đã render
-để chặn xoá nhầm khi stack `stash@{n}` đã dịch. Backend/IPC/preload/UI được pin bởi
+branch khác; restore stash yêu cầu tree sạch hoàn toàn. Apply/Pop/Drop đều gửi immutable
+stash commit OID cùng mutable `stash@{n}`; backend chỉ làm khi cả hai vẫn chỉ cùng một
+entry, nên stack dịch giữa render/click không thể apply hoặc xoá nhầm stash. Backend/IPC/preload/UI được pin bởi
 `tests/git-branch-stash.test.ts` và `tests/desktop-feature-wiring.test.ts`.
 
 Security review trước commit bắt thêm một gap: Git IPC từng tin `cwd` do renderer gửi.

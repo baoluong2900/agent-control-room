@@ -68,6 +68,8 @@ export interface GitBranchSummary {
 export interface GitStashEntry {
   /** Stack reference (`stash@{0}`). Positional: it shifts as entries are added. */
   ref: string;
+  /** Immutable commit object id: the stable identity behind the shifting ref. */
+  oid: string;
   /** Index in the stack, so the UI never has to parse `ref`. */
   index: number;
   message: string;
@@ -82,6 +84,7 @@ export interface GitStashEntry {
  */
 export interface GitStashDetail {
   ref: string;
+  oid: string;
   patch: string;
   files: string[];
   error?: string;

@@ -46,7 +46,8 @@ test("branch and stash operations are exposed across the Electron bridge", async
   assert.match(panel, /Include untracked files/);
   assert.match(panel, /window\.confirm\(/, "irreversible stash drop must ask for confirmation");
   assert.match(panel, /This cannot be undone/, "the confirmation states the consequence plainly");
-  assert.match(panel, /expectedMessage|entry\.message/, "stash drop must carry the rendered message as a stack-shift guard");
+  assert.match(panel, /stashDrop\(project!\.path, entry\.ref, entry\.oid\)/, "stash drop must carry the immutable OID as a stack-shift guard");
+  assert.match(panel, /stashApply\(project!\.path, entry\.ref, entry\.oid, keep\)/, "apply/pop must carry the same immutable identity");
 });
 
 test("storage report and cleanup are exposed and rendered in Diagnostics", async () => {

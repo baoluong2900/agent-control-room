@@ -174,12 +174,9 @@ export interface AgenticDesktopApi {
     stashDetail: (cwd: string, ref: string) => Promise<GitStashDetail>;
     stashPush: (cwd: string, message?: string, includeUntracked?: boolean) => Promise<GitOperationResult>;
     /** `keep: true` applies and leaves the entry; false pops it. */
-    stashApply: (cwd: string, ref: string, keep?: boolean) => Promise<GitOperationResult>;
-    /**
-     * Drops a stash. `expectedMessage` guards against the stack shifting between
-     * render and click — a mismatch refuses instead of deleting another entry.
-     */
-    stashDrop: (cwd: string, ref: string, expectedMessage?: string) => Promise<GitOperationResult>;
+    stashApply: (cwd: string, ref: string, expectedOid: string, keep?: boolean) => Promise<GitOperationResult>;
+    /** Drops only when the shifting ref still names the immutable expected OID. */
+    stashDrop: (cwd: string, ref: string, expectedOid: string) => Promise<GitOperationResult>;
   };
   knowledge: {
     get: (projectPath: string) => Promise<KnowledgeSnapshot | null>;
