@@ -51,22 +51,25 @@ export function AgentsPage({
   projectPath: string;
   onPickFolder: () => Promise<string | null>;
 }) {
-  const {
-    activity,
-    catalog,
-    error,
-    history,
-    loadAll,
-    ingest,
-    pings,
-    profiles,
-    runtimes,
-    saveProfile,
-    sessions,
-    deleteProfile,
-    runProfile,
-    setError,
-  } = useAgentsStore();
+  // Per-field selectors instead of a whole-store destructure. This page owns the
+  // R3F robot arena, and the store is written on every output chunk: subscribing
+  // to all of it re-rendered the canvas at the agent's output rate. Note what is
+  // deliberately NOT read here — `terminals` and `chatThreads` belong to the
+  // terminal/chat panels, so their per-chunk growth no longer touches this page.
+  const activity = useAgentsStore((state) => state.activity);
+  const catalog = useAgentsStore((state) => state.catalog);
+  const error = useAgentsStore((state) => state.error);
+  const history = useAgentsStore((state) => state.history);
+  const pings = useAgentsStore((state) => state.pings);
+  const profiles = useAgentsStore((state) => state.profiles);
+  const runtimes = useAgentsStore((state) => state.runtimes);
+  const sessions = useAgentsStore((state) => state.sessions);
+  const loadAll = useAgentsStore((state) => state.loadAll);
+  const ingest = useAgentsStore((state) => state.ingest);
+  const saveProfile = useAgentsStore((state) => state.saveProfile);
+  const deleteProfile = useAgentsStore((state) => state.deleteProfile);
+  const runProfile = useAgentsStore((state) => state.runProfile);
+  const setError = useAgentsStore((state) => state.setError);
 
   const [view, setView] = useState<ViewMode>("fleet");
   const [zoom, setZoom] = useState(100);

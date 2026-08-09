@@ -66,7 +66,14 @@ export function AgentBuilderModal({
   onClose: () => void;
   onPickFolder: () => Promise<string | null>;
 }) {
-  const { catalog, pings, models, pingOne, loadModels, saveProfile } = useAgentsStore();
+  // Per-field selectors: this modal only needs the catalog and probe results, and
+  // a whole-store destructure re-rendered it on every streamed output chunk.
+  const catalog = useAgentsStore((state) => state.catalog);
+  const pings = useAgentsStore((state) => state.pings);
+  const models = useAgentsStore((state) => state.models);
+  const pingOne = useAgentsStore((state) => state.pingOne);
+  const loadModels = useAgentsStore((state) => state.loadModels);
+  const saveProfile = useAgentsStore((state) => state.saveProfile);
   const initialModule = resolveModuleSeed(
     editing ? { moduleId: editing.module, tags: editing.tags, cliId: editing.cliId } : {},
   );

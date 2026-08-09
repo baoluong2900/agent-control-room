@@ -3,7 +3,13 @@ import "@xterm/xterm/css/xterm.css";
 import { CornerDownLeft, Eraser, Play, Radio, RotateCcw, Square, X } from "lucide-react";
 import type { AgentProfile, AgentSessionSummary } from "@contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { statusLabel, useAgentsStore } from "../stores/agents-store";
+import { statusLabel, type TerminalChunk, useAgentsStore } from "../stores/agents-store";
+
+/**
+ * Stable empty array: a selector returning a fresh `[]` is a new reference on
+ * every store write, which defeats zustand's equality check.
+ */
+const EMPTY_CHUNKS: TerminalChunk[] = [];
 
 const theme = {
   background: "#070815",
@@ -29,11 +35,18 @@ export function AgentTerminal({
   cwd: string;
   onClose: () => void;
 }) {
-  const { runtimes, sessions, terminals, clearTerminal, hydrateTerminal, restartRun, runProfile, sendInput, stopRun } =
-    useAgentsStore();
-  const runtime = runtimes[profile.id];
+  // Per-field selectors: a whole-store destructure re-rendered this terminal on
+  // every store write, including output belonging to a different agent.
+  const runtime = useAgentsStore((state) => state.runtimes[profile.id]);
+  const sessions = useAgentsStore((state) => state.sessions);
+  const clearTerminal = useAgentsStore((state) => state.clearTerminal);
+  const hydrateTerminal = useAgentsStore((state) => state.hydrateTerminal);
+  const restartRun = useAgentsStore((state) => state.restartRun);
+  const runProfile = useAgentsStore((state) => state.runProfile);
+  const sendInput = useAgentsStore((state) => state.sendInput);
+  const stopRun = useAgentsStore((state) => state.stopRun);
   const runId = runtime?.runId ?? null;
-  const chunks = runId ? terminals[runId] ?? [] : [];
+  const chunks = useAgentsStore((state) => (runId ? state.terminals[runId] : undefined)) ?? EMPTY_CHUNKS;
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);

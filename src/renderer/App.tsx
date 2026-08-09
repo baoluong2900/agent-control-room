@@ -25,7 +25,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { AnalyticsModule } from "./analytics/AnalyticsModule";
 import { IntegrationsModule } from "./integrations/IntegrationsModule";
-import { KnowledgeModule } from "./knowledge/KnowledgeModule";
+import { KnowledgeModule, type KnowledgeFocusRequest } from "./knowledge/KnowledgeModule";
 import { WorkspaceMap3D } from "./map/WorkspaceMap3D";
 import { ProjectsModule } from "./projects/ProjectsModule";
 import { SettingsModule } from "./settings/SettingsModule";
@@ -560,27 +560,31 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [identity, setIdentity] = useState<AppIdentity | null>(null);
   const [identityLoading, setIdentityLoading] = useState(true);
+  const [sourceFocus, setSourceFocus] = useState<KnowledgeFocusRequest | null>(null);
   const previousIdentityStatus = useRef<AppIdentity["status"] | null>(null);
-  const {
-    activeRunId,
-    activeStatus,
-    clearTerminal,
-    diagnostics,
-    gitDiff,
-    history,
-    ingestEvent,
-    project,
-    recentProjects,
-    selectedZone,
-    setActiveRun,
-    setDiagnostics,
-    setGitDiff,
-    setHistory,
-    setProject,
-    setRecentProjects,
-    setSelectedZone,
-    terminalLines,
-  } = useWorkspaceStore();
+  // One selector per field, deliberately: destructuring `useWorkspaceStore()`
+  // subscribes this component to *every* store change, and `ingestEvent` writes
+  // on every stdout chunk. That made a talking agent re-render the whole shell —
+  // including the R3F workspace canvas — dozens of times a second. `terminalLines`
+  // is read by TasksModule directly for the same reason; App never needs it.
+  const activeRunId = useWorkspaceStore((state) => state.activeRunId);
+  const activeStatus = useWorkspaceStore((state) => state.activeStatus);
+  const diagnostics = useWorkspaceStore((state) => state.diagnostics);
+  const gitDiff = useWorkspaceStore((state) => state.gitDiff);
+  const history = useWorkspaceStore((state) => state.history);
+  const project = useWorkspaceStore((state) => state.project);
+  const recentProjects = useWorkspaceStore((state) => state.recentProjects);
+  const selectedZone = useWorkspaceStore((state) => state.selectedZone);
+  // Actions are stable identities in the store, so these never trigger a render.
+  const clearTerminal = useWorkspaceStore((state) => state.clearTerminal);
+  const ingestEvent = useWorkspaceStore((state) => state.ingestEvent);
+  const setActiveRun = useWorkspaceStore((state) => state.setActiveRun);
+  const setDiagnostics = useWorkspaceStore((state) => state.setDiagnostics);
+  const setGitDiff = useWorkspaceStore((state) => state.setGitDiff);
+  const setHistory = useWorkspaceStore((state) => state.setHistory);
+  const setProject = useWorkspaceStore((state) => state.setProject);
+  const setRecentProjects = useWorkspaceStore((state) => state.setRecentProjects);
+  const setSelectedZone = useWorkspaceStore((state) => state.setSelectedZone);
   const bridgeAvailable =
     typeof window !== "undefined" && Boolean((window as Window & { agentic?: unknown }).agentic);
   const bridgeErrorMessage = "Electron preload bridge is not available. Start the desktop app with npm run dev or the packaged app binary.";
@@ -643,6 +647,17 @@ export default function App() {
   const navigate = useMemo(
     () => (nav: WorkspaceNavKey | string) => {
       setActiveNav(isWorkspaceNavKey(nav) ? nav : "Overview");
+    },
+    [],
+  );
+
+  // A source hit from the top bar opens in Knowledge, the module that already
+  // renders file detail. Carried as a request object rather than a bare path so
+  // searching the same file twice still re-focuses it.
+  const openSourceFile = useMemo(
+    () => (filePath: string) => {
+      setSourceFocus({ path: filePath, requestedAt: Date.now() });
+      setActiveNav("Knowledge");
     },
     [],
   );
@@ -826,6 +841,7 @@ export default function App() {
           diagnostics={diagnostics}
           identity={identity}
           onNavigate={navigate}
+          onOpenSourceFile={openSourceFile}
           onSignOut={signOut}
           project={project}
           onRefreshDiagnostics={refreshDiagnostics}
@@ -872,10 +888,9 @@ export default function App() {
             project={project}
             startAgent={startAgent}
             stopAgent={stopAgent}
-            terminalLines={terminalLines}
           />
         ) : activeNav === "Knowledge" ? (
-          <KnowledgeModule project={project} onPickFolder={pickFolder} />
+          <KnowledgeModule focusRequest={sourceFocus} project={project} onPickFolder={pickFolder} />
         ) : activeNav === "Integrations" ? (
           <IntegrationsModule
             diagnostics={diagnostics}

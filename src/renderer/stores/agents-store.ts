@@ -413,8 +413,14 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
 }));
 
 function appendChunk(existing: TerminalChunk[] | undefined, chunk: TerminalChunk): TerminalChunk[] {
-  const next = [...(existing ?? []), chunk];
-  return next.length > MAX_CHUNKS ? next.slice(next.length - MAX_CHUNKS) : next;
+  if (!existing || existing.length === 0) return [chunk];
+  if (existing.length < MAX_CHUNKS) return [...existing, chunk];
+  // At the cap, build the trimmed array directly instead of allocating a
+  // MAX_CHUNKS+1 copy and immediately slicing it into a second one. A streaming
+  // agent hits this path on every chunk, so it is the steady state, not the edge.
+  const next = existing.slice(existing.length - MAX_CHUNKS + 1);
+  next.push(chunk);
+  return next;
 }
 
 /** Persisted log rows store the stream as a plain string, so narrow it back. */

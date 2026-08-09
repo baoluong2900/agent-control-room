@@ -12,6 +12,13 @@ type ChatMessage = {
   time: string;
 };
 
+/**
+ * Stable empty array for the "no chunks yet" case. Returning a fresh `[]` from a
+ * zustand selector makes it a new reference on every store write, which defeats
+ * the equality check and re-renders the panel for other agents' output.
+ */
+const EMPTY_CHUNKS: TerminalChunk[] = [];
+
 const streamLabels: Record<TerminalChunk["stream"], string> = {
   event: "system",
   stderr: "agent error",
@@ -37,17 +44,28 @@ export function AgentChatPanel({
   onClose: () => void;
   onOpenTerminal: () => void;
 }) {
-  const { chatConversationIds, chatThreads, runtimes, sessions, terminals, clearTerminal, runProfile, sendInput, stopRun } = useAgentsStore();
-  const runtime = runtimes[profile.id];
+  // Per-field selectors, not a whole-store destructure: the store is written on
+  // every output chunk, and subscribing to all of it re-rendered this panel for
+  // unrelated changes (catalog, history, pings, other agents' terminals).
+  const runtime = useAgentsStore((state) => state.runtimes[profile.id]);
+  const conversationId = useAgentsStore((state) => state.chatConversationIds[profile.id]);
+  const sessions = useAgentsStore((state) => state.sessions);
+  const clearTerminal = useAgentsStore((state) => state.clearTerminal);
+  const runProfile = useAgentsStore((state) => state.runProfile);
+  const sendInput = useAgentsStore((state) => state.sendInput);
+  const stopRun = useAgentsStore((state) => state.stopRun);
   const runId = runtime?.runId ?? null;
-  const chunks = runId ? terminals[runId] ?? [] : [];
+  // Narrow to this run's / this profile's own chunks so another agent streaming
+  // in a second panel cannot re-render this one.
+  const chunks = useAgentsStore((state) => (runId ? state.terminals[runId] : undefined)) ?? EMPTY_CHUNKS;
+  const thread = useAgentsStore((state) => state.chatThreads[profile.id]);
   const module = resolveModuleSeed({ moduleId: profile.module, tags: profile.tags, cliId: profile.cliId });
   const session = useMemo(() => sessions.find((entry) => entry.runId === runId), [runId, sessions]);
-  const live = Boolean(session) || runStatusIsLive(runtimes[profile.id]?.status);
+  const live = Boolean(session) || runStatusIsLive(runtime?.status);
   const messages = useMemo(() => {
-    const source = profile.cliId === "shell" ? chunks : chatThreads[profile.id] ?? chunks;
+    const source = profile.cliId === "shell" ? chunks : thread ?? chunks;
     return buildChatMessages(source).slice(-80);
-  }, [chatThreads, chunks, profile.cliId, profile.id]);
+  }, [chunks, profile.cliId, thread]);
   const status = runtime?.status ?? session?.status ?? "idle";
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,7 +93,7 @@ export function AgentChatPanel({
         // Only CLIs without that capability keep an interactive stdin session.
         interactive: supportsStructuredChat ? false : true,
         uiMode: "chat",
-        resumeConversationId: chatConversationIds[profile.id],
+        resumeConversationId: conversationId,
         prompt,
       });
       if (launched) setDraft("");

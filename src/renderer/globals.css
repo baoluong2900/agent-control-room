@@ -603,6 +603,51 @@ input:focus-visible {
   color: #f7f3ff;
 }
 
+/* Source hits carry repo-relative paths, which need more room than area labels. */
+.search-results-popover {
+  max-height: 420px;
+  overflow-y: auto;
+  width: 330px;
+}
+
+/* Separates the source group from the area rows above it. */
+.search-results-popover .search-source-group {
+  border-top: 1px solid rgba(58, 142, 245, .18);
+  margin-bottom: 6px;
+  margin-top: 10px;
+  padding-top: 9px;
+}
+
+.search-results-popover p.search-source-hit {
+  align-items: flex-start;
+  border-top: 0;
+  padding-top: 6px;
+}
+
+.search-results-popover p.search-source-hit > svg {
+  color: var(--blue);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.search-results-popover p.search-source-hit > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.search-results-popover p.search-source-hit strong {
+  font-size: 10px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.search-results-popover p.search-source-hit small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
 .notification-popover p + p {
   border: 0;
   padding-top: 7px;

@@ -37,7 +37,7 @@ import type {
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { TerminalPanel } from "../terminal/TerminalPanel";
-import type { TerminalLine } from "../stores/workspace-store";
+import { useWorkspaceStore } from "../stores/workspace-store";
 import { cliLabels, cliOptions, stepKindMeta } from "../workflows/workflow-ui";
 import "./tasks.css";
 
@@ -252,7 +252,6 @@ export function TasksModule({
   project,
   startAgent,
   stopAgent,
-  terminalLines,
 }: {
   activeRunId: string | null;
   activeStatus: AgentStatus;
@@ -263,8 +262,12 @@ export function TasksModule({
   project: ProjectSummary | null;
   startAgent: (input: { cliId: AgentCliId; model: string; prompt: string; shellCommand?: string; taskId?: string }) => Promise<void>;
   stopAgent: (runId: string) => Promise<void>;
-  terminalLines: TerminalLine[];
 }) {
+  // Read straight from the store instead of taking a prop: this array grows on
+  // every stdout chunk, and threading it through App made the whole shell (the
+  // R3F workspace canvas included) re-render at the agent's output rate. Only
+  // this module's terminal panel actually displays it.
+  const terminalLines = useWorkspaceStore((state) => state.terminalLines);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(taskSeeds[0].id);

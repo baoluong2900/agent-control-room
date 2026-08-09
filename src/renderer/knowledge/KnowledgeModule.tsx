@@ -27,9 +27,21 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./knowledge.css";
 
+/**
+ * A request to focus one indexed file, from outside this module (the top-bar
+ * search). `requestedAt` is what makes searching the same path twice re-focus it:
+ * a bare path would be an unchanged prop the effect could not react to.
+ */
+export type KnowledgeFocusRequest = {
+  path: string;
+  requestedAt: number;
+};
+
 type KnowledgeModuleProps = {
   project: ProjectSummary | null;
   onPickFolder: () => Promise<string | null>;
+  /** Set when another surface asked to open a specific file. */
+  focusRequest?: KnowledgeFocusRequest | null;
 };
 
 type ViewMode = "files" | "graph" | "brief";
@@ -40,7 +52,7 @@ const exportOptions: Array<{ format: KnowledgeExportFormat; label: string; icon:
   { format: "xml", label: "XML", icon: Braces },
 ];
 
-export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps) {
+export function KnowledgeModule({ project, onPickFolder, focusRequest }: KnowledgeModuleProps) {
   const [snapshot, setSnapshot] = useState<KnowledgeSnapshot | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -61,6 +73,9 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
   // `reused` only appears on the terminal `done` event, which arrives before the
   // scan invoke resolves, so it is stashed here for the completion notice.
   const lastReused = useRef(0);
+  // The `requestedAt` of the focus request already applied, so a re-render cannot
+  // re-apply it and steal the user's current selection.
+  const handledFocus = useRef<number | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -89,6 +104,35 @@ export function KnowledgeModule({ project, onPickFolder }: KnowledgeModuleProps)
       mounted = false;
     };
   }, [project]);
+
+  // Focus a file another surface asked for. Applied once per request, tracked by
+  // `requestedAt`: without that guard a later rescan would re-run this effect and
+  // yank the selection away from whatever the user had clicked since.
+  //
+  // A request arriving before the snapshot has loaded is deliberately *not* marked
+  // handled, so it applies as soon as there is a snapshot to resolve it against.
+  useEffect(() => {
+    if (!focusRequest || handledFocus.current === focusRequest.requestedAt) return;
+    if (!snapshot) return;
+
+    handledFocus.current = focusRequest.requestedAt;
+    const match = snapshot.files.find((file) => file.path === focusRequest.path);
+    if (!match) {
+      // The hit came from a stored snapshot, so a miss means the index moved on —
+      // say so instead of selecting nothing and looking broken.
+      setNotice(`${focusRequest.path} is not in the current CodeGraph. Rescan to refresh the index.`);
+      return;
+    }
+
+    // Clearing the query and category is what makes the row actually visible: both
+    // filter `filteredFiles`, and a focused file hidden behind a filter reads as a
+    // click that did nothing.
+    setQuery("");
+    setCategory("all");
+    setViewMode("files");
+    setSelectedPath(match.path);
+    setNotice(`Opened ${match.path} from workspace search.`);
+  }, [focusRequest, snapshot]);
 
   // Ranked search replaces the old client-side substring filter, which had no
   // ordering: a file merely mentioning the query in prose ranked identically to

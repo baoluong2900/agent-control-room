@@ -38,6 +38,15 @@ type QueuedProcess = {
   startedAt: string;
 };
 
+/** One coalesced run of same-stream output, in arrival order. */
+type PendingChunk = { type: "run:stdout" | "run:stderr"; text: string };
+
+type PendingOutput = {
+  chunks: PendingChunk[];
+  bytes: number;
+  timer: NodeJS.Timeout | null;
+};
+
 const MAX_CONCURRENT_RUNS = 3;
 
 /**
@@ -53,6 +62,22 @@ const KILL_GRACE_MS = 5_000;
  * a bound, a chatty run would keep every byte it ever printed in memory.
  */
 const STRUCTURED_CHAT_BUFFER_LIMIT = 64 * 1024;
+
+/**
+ * How long output may sit in `pendingOutput` before it is written and published.
+ *
+ * Two frames at 60Hz: short enough that a streaming CLI still reads as live in the
+ * terminal, long enough that a burst of hundreds of small line-writes collapses
+ * into a single sqlite INSERT, a single IPC message, and a single React render.
+ */
+const OUTPUT_FLUSH_MS = 32;
+
+/**
+ * Flush early once a run has this much text pending, so a CLI dumping a large
+ * payload in one burst does not build an unbounded buffer while waiting on the
+ * timer.
+ */
+const OUTPUT_FLUSH_BYTES = 32 * 1024;
 
 const statusHints: Array<{ match: RegExp; status: AgentStatus }> = [
   { match: /\b(plan|planning|strategy|roadmap)\b/i, status: "planning" },
@@ -84,6 +109,18 @@ export class AgentProcessManager {
    * period.
    */
   private readonly terminating = new Set<string>();
+  /**
+   * Output waiting to be written to the database and pushed to the renderer.
+   *
+   * A CLI writes stdout in whatever size the pipe hands over — often a line at a
+   * time, hundreds per second while a build or test run streams. Publishing each
+   * one immediately cost a synchronous sqlite INSERT *and* an IPC message *and* a
+   * renderer store update per chunk, which is what made the whole window sluggish
+   * while any agent was talking. Coalescing a burst into one write per
+   * `OUTPUT_FLUSH_MS` keeps the text and its order intact while cutting that
+   * traffic by one to two orders of magnitude.
+   */
+  private readonly pendingOutput = new Map<string, PendingOutput>();
   private drainingQueue = false;
   /**
    * Runs stop() has already settled. The map entry is gone by the time the child
@@ -385,6 +422,10 @@ export class AgentProcessManager {
     });
 
     child.on("error", (error) => {
+      // Publish buffered output before the failure so the terminal keeps the
+      // order the CLI produced, and so the run's last words are not dropped
+      // when the pending map is cleared below.
+      this.flushOutput(runId);
       this.running.delete(runId);
       if (this.stoppedByUser.delete(runId) || this.shuttingDown) return;
       this.db.updateAgentRunStatus(runId, "failed", null);
@@ -403,6 +444,11 @@ export class AgentProcessManager {
     });
 
     child.on("exit", (code) => {
+      // Must precede the `running` lookup below: the conversation id is parsed
+      // out of stdout by publishOutput(), so a still-buffered final chunk would
+      // otherwise be dropped and a structured-chat run would lose the id it
+      // needs to resume the thread on the next turn.
+      this.flushOutput(runId);
       const running = this.running.get(runId);
       this.running.delete(runId);
       // stop() already settled this run; SIGTERM reports a null exit code, which
@@ -518,6 +564,10 @@ export class AgentProcessManager {
     const running = this.running.get(runId);
     if (!running) return;
 
+    // Keep the terminal in the order the CLI produced: anything it printed
+    // before the stop must land above the "stopped" event, not after it.
+    this.flushOutput(runId);
+
     // Claim the run before signalling, so the exit handler that SIGTERM triggers
     // sees the decision and leaves the "stopped" status alone.
     this.stoppedByUser.add(runId);
@@ -610,6 +660,13 @@ export class AgentProcessManager {
     }
 
     this.shuttingDown = true;
+    // Drop buffered output and its timers: `before-quit` closes the database
+    // immediately after this returns, so a late flush would write to a closed
+    // handle. The runs are already recorded as stopped and no reader survives.
+    for (const pending of this.pendingOutput.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
+    }
+    this.pendingOutput.clear();
     for (const runId of [...this.running.keys()]) {
       void this.stop(runId);
     }
@@ -661,6 +718,10 @@ export class AgentProcessManager {
     return [...running, ...spawning, ...queued];
   }
 
+  /**
+   * Buffers one stdout/stderr chunk. The write, the status hint and the IPC
+   * message all happen in `flushOutput`, at most once per `OUTPUT_FLUSH_MS`.
+   */
   private handleOutput(runId: string, type: "run:stdout" | "run:stderr", message: string): void {
     // The quit path is synchronous — `stopAll()` signals every child and
     // `before-quit` closes the database immediately afterwards — but the children
@@ -673,6 +734,54 @@ export class AgentProcessManager {
     // is the correct trade: the run is already recorded as stopped, and no reader
     // survives to display them.
     if (this.shuttingDown) return;
+
+    let pending = this.pendingOutput.get(runId);
+    if (!pending) {
+      pending = { chunks: [], bytes: 0, timer: null };
+      this.pendingOutput.set(runId, pending);
+    }
+
+    // Merge into the previous chunk while the stream is unchanged: stdout and
+    // stderr have to stay separate rows and separate events, but consecutive
+    // writes on the same stream are just one longer piece of text.
+    const last = pending.chunks[pending.chunks.length - 1];
+    if (last && last.type === type) {
+      last.text += message;
+    } else {
+      pending.chunks.push({ type, text: message });
+    }
+    pending.bytes += message.length;
+
+    if (pending.bytes >= OUTPUT_FLUSH_BYTES) {
+      this.flushOutput(runId);
+      return;
+    }
+    if (!pending.timer) {
+      pending.timer = setTimeout(() => this.flushOutput(runId), OUTPUT_FLUSH_MS);
+      // Never hold the event loop open for buffered log text: the app must be
+      // able to quit inside the flush window.
+      pending.timer.unref?.();
+    }
+  }
+
+  /**
+   * Publishes whatever this run has buffered. Called on the flush timer, when the
+   * buffer grows past `OUTPUT_FLUSH_BYTES`, and before any terminal event so the
+   * user never sees "exited" above the output that preceded it.
+   */
+  private flushOutput(runId: string): void {
+    const pending = this.pendingOutput.get(runId);
+    if (!pending) return;
+    if (pending.timer) clearTimeout(pending.timer);
+    this.pendingOutput.delete(runId);
+    if (this.shuttingDown) return;
+
+    for (const chunk of pending.chunks) {
+      this.publishOutput(runId, chunk.type, chunk.text);
+    }
+  }
+
+  private publishOutput(runId: string, type: "run:stdout" | "run:stderr", message: string): void {
     this.db.appendTerminalLog(runId, type === "run:stderr" ? "stderr" : "stdout", message);
     const running = this.running.get(runId);
     if (running?.structuredChat && type === "run:stdout") {

@@ -1,12 +1,20 @@
-import { Bell, ChevronDown, ChevronRight, Layers, LogOut, RefreshCw, Search, Settings2 } from "lucide-react";
-import type { AppIdentity, ProjectSummary, SystemDiagnostics } from "@contracts";
-import { useMemo, useState } from "react";
-import { workspaceNavigation, type WorkspaceNavKey } from "../workspace-navigation";
+import { Bell, ChevronDown, ChevronRight, FileCode2, Layers, LogOut, RefreshCw, Search, Settings2 } from "lucide-react";
+import type { AppIdentity, KnowledgeSearchResult, ProjectSummary, SystemDiagnostics } from "@contracts";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { WorkspaceNavKey } from "../workspace-navigation";
+import {
+  chooseEnterTarget,
+  describeHit,
+  matchNavigationAreas,
+  sourceSearchMessage,
+  summarizeSourceSearch,
+} from "./topbar-search";
 
 export function TopBar({
   diagnostics,
   identity,
   onNavigate,
+  onOpenSourceFile,
   onSignOut,
   project,
   onRefreshDiagnostics,
@@ -15,6 +23,8 @@ export function TopBar({
   diagnostics: SystemDiagnostics | null;
   identity: AppIdentity | null;
   onNavigate: (nav: WorkspaceNavKey) => void;
+  /** Opens a source file from a search hit, in whichever module renders it. */
+  onOpenSourceFile: (path: string) => void;
   onSignOut: () => Promise<void>;
   project: ProjectSummary | null;
   onRefreshDiagnostics: () => void;
@@ -25,6 +35,9 @@ export function TopBar({
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [sourceResult, setSourceResult] = useState<KnowledgeSearchResult | null>(null);
+  // A request that resolves after the popover closes must not push state back in.
+  const mounted = useRef(true);
 
   const installedCount = diagnostics?.tools.filter((tool) => tool.installed).length ?? 0;
   const total = diagnostics?.tools.length ?? 0;
@@ -33,21 +46,72 @@ export function TopBar({
   const initials = workspaceInitials(identity?.displayName ?? project?.name);
   const toolsSummary = diagnostics ? `${installedCount}/${total} local tools detected` : "Scanning local tools";
   const statusLabel = diagnostics ? `${installedCount}/${total} Tools Ready` : "Diagnostics Pending";
-  const searchResults = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    return workspaceNavigation.filter(
-      (target) =>
-        !needle ||
-        target.label.toLowerCase().includes(needle) ||
-        target.summary.toLowerCase().includes(needle),
-    );
-  }, [search]);
+
+  const searchResults = useMemo(() => matchNavigationAreas(search), [search]);
+  const sourceState = useMemo(
+    () => summarizeSourceSearch({ query: search, hasProject: Boolean(project), result: sourceResult }),
+    [project, search, sourceResult],
+  );
+  const sourceMessage = sourceSearchMessage(sourceState);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // Ranked source search reuses `knowledge:search`, the same scorer the Knowledge
+  // module uses. Nothing is queried until the box is open and a project is picked,
+  // so the top bar costs nothing while idle.
+  useEffect(() => {
+    const query = search.trim();
+    if (!searchOpen || !project || !query) {
+      setSourceResult(null);
+      return;
+    }
+
+    let live = true;
+    const timer = setTimeout(() => {
+      void window.agentic.knowledge
+        .search({ projectPath: project.path, query, limit: 12 })
+        .then((result) => {
+          if (live && mounted.current) setSourceResult(result);
+        })
+        .catch(() => {
+          if (live && mounted.current) setSourceResult(null);
+        });
+    }, 140);
+
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [project, search, searchOpen]);
+
+  function closeSearch() {
+    setSearch("");
+    setSearchOpen(false);
+    setSourceResult(null);
+  }
 
   function openNav(target: WorkspaceNavKey) {
     onNavigate(target);
-    setSearch("");
-    setSearchOpen(false);
+    closeSearch();
     setProfileOpen(false);
+  }
+
+  function openFile(path: string) {
+    onOpenSourceFile(path);
+    closeSearch();
+    setProfileOpen(false);
+  }
+
+  function submitSearch() {
+    const target = chooseEnterTarget(search, searchResults, sourceState);
+    if (!target) return;
+    if (target.kind === "area") openNav(target.key);
+    else openFile(target.path);
   }
 
   async function signOut() {
@@ -85,11 +149,11 @@ export function TopBar({
             <input
               autoFocus
               value={search}
-              placeholder="Search workspace"
+              placeholder="Search areas and source"
               onChange={(event) => setSearch(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && searchResults[0]) openNav(searchResults[0].key);
-                if (event.key === "Escape") setSearchOpen(false);
+                if (event.key === "Enter") submitSearch();
+                if (event.key === "Escape") closeSearch();
               }}
             />
           )}
@@ -107,8 +171,8 @@ export function TopBar({
           {searchOpen && (
             <div className="notification-popover search-results-popover">
               <div>
-                <strong>Open Workspace Area</strong>
-                <small>{project ? project.path : "Select a project to scope project data"}</small>
+                <strong>Workspace Search</strong>
+                <small>{project ? project.path : "Select a project to search source"}</small>
               </div>
               {searchResults.map((target) => (
                 <p key={target.key} onClick={() => openNav(target.key)}>
@@ -122,6 +186,33 @@ export function TopBar({
                   No matching area
                 </p>
               )}
+
+              {sourceState.kind !== "idle" && (
+                <div className="search-source-group">
+                  <strong>Source</strong>
+                  <small>
+                    {sourceState.kind === "hits"
+                      ? `${sourceState.hits.length} of ${sourceState.scanned} indexed files`
+                      : "CodeGraph snapshot"}
+                  </small>
+                </div>
+              )}
+              {sourceMessage && (
+                <p>
+                  <span className="tiny-orb amber" />
+                  {sourceMessage}
+                </p>
+              )}
+              {sourceState.kind === "hits" &&
+                sourceState.hits.map((hit) => (
+                  <p className="search-source-hit" key={hit.path} onClick={() => openFile(hit.path)}>
+                    <FileCode2 size={12} />
+                    <span>
+                      <strong>{hit.path}</strong>
+                      <small>{describeHit(hit)}</small>
+                    </span>
+                  </p>
+                ))}
             </div>
           )}
         </div>
