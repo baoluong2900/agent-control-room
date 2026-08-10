@@ -559,9 +559,24 @@ thì nối vào channel đó thay vì viết filter thứ hai.
 
 ## 9. Database/migration: app DB đã có `schema_migrations`, workflow repository còn legacy `ensureColumns`
 
-### DB1 — Versioned migrations đã có cho app DB, nhưng workflow schema chưa được gom hết vào đó
+### DB1 — ✅ Đã xong hoàn toàn (2026-08-10)
 
-Evidence:
+**Cập nhật 2026-08-10:** phần workflow đã xong. `WorkflowRepository` không còn
+`ensureColumns()` nào — grep chỉ còn *dòng import* ở `workflow-repository.ts:15` (một
+import chết), và `bootstrap()` đã đi qua `runMigrations(db, workflowMigrations())` tại
+`:112`. Comment `:117-125` đã pin quy tắc "add a migration version".
+
+Nợ ở `desktop-database.ts` cũng đã trả: 6 lần `this.ensureColumn(...)` cho
+`agent_runs`/`agent_profiles` và `ensureColumns(this.db, "tasks", …)` giờ là migration
+**version 9** (`app-legacy-additive-columns`), và method private `ensureColumn` đã bị
+xoá vì không còn ai gọi. `idx_tasks_due` + `idx_agent_runs_task` cũng dời vào v9 —
+chúng index đúng các cột v9 thêm, mà baseline block chạy trước `runMigrations()`, nên
+để nguyên thì một DB cũ fail khi tạo index trên cột chưa tồn tại.
+
+Từ đây `appMigrations` là **chỗ duy nhất** khai cột mới. Nếu bạn định thêm
+`ensureColumn` vào `DesktopDatabase.migrate()`, đừng — thêm một version.
+
+Evidence (lịch sử, trạng thái trước khi sửa):
 
 - `migrations.ts` đã tạo bảng `schema_migrations`, có `appMigrations`, và `runMigrations()` chạy transaction từng version.
 - `DesktopDatabase.migrate()` đã gọi `runMigrations(this.db, appMigrations)` sau baseline schema.
