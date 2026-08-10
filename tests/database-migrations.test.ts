@@ -212,6 +212,97 @@ test("a pre-upgrade database gains the new columns without losing its rows", asy
   db.close();
 });
 
+test("a legacy database gains the app-table columns version 9 owns, and keeps its task rows", async () => {
+  const dir = tempDir("legacy-app-columns");
+  fs.mkdirSync(dir, { recursive: true });
+  const sqlite = await import("node:sqlite");
+
+  // The oldest shape of the three tables version 9 adopts: `tasks`, `agent_runs`
+  // and `agent_profiles` with their original columns only, and no schema_migrations
+  // row claiming otherwise. Until version 9 these columns were applied by
+  // `ensureColumn` calls outside the migration list, so a fresh database passed
+  // trivially and this upgrade path was the only thing that could break.
+  const legacy = new sqlite.DatabaseSync(path.join(dir, "agentic-workspace.sqlite"));
+  legacy.exec(`
+    create table tasks (
+      id text primary key, project_id text, title text not null, prompt text not null,
+      status text not null, created_at text not null default current_timestamp, completed_at text
+    );
+    create table agent_runs (
+      id text primary key, cli_id text not null, cwd text not null, prompt text not null,
+      model text, status text not null, started_at text not null, ended_at text, exit_code integer
+    );
+    create table agent_profiles (
+      id text primary key, name text not null, cli_id text not null,
+      created_at text not null default current_timestamp
+    );
+    insert into tasks (id, project_id, title, prompt, status, created_at)
+      values ('t1','/tmp/proj','Legacy task','do the old thing','open','2025-01-01');
+    insert into agent_runs (id, cli_id, cwd, prompt, status, started_at)
+      values ('r1','claude','/tmp/proj','legacy run','completed','2025-01-01');
+    insert into agent_profiles (id, name, cli_id) values ('p1','Legacy profile','claude');
+  `);
+  legacy.close();
+
+  const db = await DesktopDatabase.open(dir);
+  assert.equal(db.schemaVersion(), latestVersion);
+
+  // Read through the public API rather than pragma alone: a column that exists but
+  // is not selected by the hydrator is not actually usable.
+  const task = db.getTask("t1");
+  assert.equal(task?.title, "Legacy task", "an existing task row must survive the upgrade");
+  assert.equal(task?.automationEnabled, false, "the added column takes its declared default");
+  assert.equal(task?.runCount, 0);
+  assert.equal(task?.dueAt, null);
+  assert.equal(task?.attemptCount, 0, "version 6 columns land on this fixture too");
+
+  // The task is now schedulable, which requires every one of the added columns.
+  const scheduled = db.saveTask({
+    id: "t1",
+    projectPath: "/tmp/proj",
+    title: "Legacy task",
+    prompt: "do the old thing",
+    status: "open",
+    assignedCliId: "codex",
+    dueAt: "2025-01-02T00:00:00.000Z",
+    automationEnabled: true,
+  });
+  assert.equal(scheduled.assignedCliId, "codex");
+  assert.deepEqual(
+    db.listDueTasks("2025-02-01T00:00:00.000Z").map((entry) => entry.id),
+    ["t1"],
+    "the due-task index and its columns must both work after the upgrade",
+  );
+
+  const columnsOf = (table: string) =>
+    new Set(
+      (db as unknown as { db: SqliteDatabase }).db
+        .prepare(`pragma table_info(${table})`)
+        .all()
+        .map((row) => (row as { name: string }).name),
+    );
+
+  for (const column of ["profile_id", "task_id", "conversation_id"]) {
+    assert.ok(columnsOf("agent_runs").has(column), `agent_runs.${column} must exist after the upgrade`);
+  }
+  for (const column of ["provider_connection_id", "module", "options"]) {
+    assert.ok(columnsOf("agent_profiles").has(column), `agent_profiles.${column} must exist after the upgrade`);
+  }
+
+  // The indexes moved into version 9 alongside the columns they cover.
+  const indexes = new Set(
+    (
+      (db as unknown as { db: SqliteDatabase }).db
+        .prepare("select name from sqlite_master where type = 'index'")
+        .all() as Array<{ name: string }>
+    ).map((row) => row.name),
+  );
+  assert.ok(indexes.has("idx_tasks_due"), "the due-task index must be created after its columns exist");
+  assert.ok(indexes.has("idx_agent_runs_task"), "the run-by-task index must be created after its column exists");
+
+  db.close();
+});
+
 test("a legacy database with no schema_migrations gains every workflow column and keeps its seeds stable", async () => {
   const dir = tempDir("legacy-workflow-columns");
   fs.mkdirSync(dir, { recursive: true });

@@ -28,12 +28,18 @@ import {
   commitGitChanges,
   createGitStash,
   dropGitStash,
+  fetchGitRemote,
+  pullGitRemote,
+  pushGitBranch,
+  readGitBlame,
   readGitBranches,
   readGitDiff,
   readGitFileDiff,
   readGitLog,
+  readGitPushPlan,
   readGitStashDetail,
   readGitStashes,
+  readGitTracking,
   stageGitFile,
   unstageGitFile,
 } from "../git/git-service";
@@ -246,6 +252,28 @@ export function registerIpcHandlers({
   );
   ipcMain.handle("git:stash-drop", (_event, cwd: string, ref: string, expectedOid: string) =>
     dropGitStash(approvedGitCwd(cwd), ref, expectedOid),
+  );
+
+  // Outbound Git. `approvedGitCwd` matters more here than anywhere else in this
+  // file: fetch and push contact a network host, so an unapproved path would let
+  // the renderer choose which repository's code leaves the machine.
+  ipcMain.handle("git:tracking", (_event, cwd: string) => readGitTracking(approvedGitCwd(cwd)));
+  ipcMain.handle("git:fetch", (_event, cwd: string, remote?: string) =>
+    fetchGitRemote(approvedGitCwd(cwd), remote),
+  );
+  ipcMain.handle("git:pull", (_event, cwd: string, remote?: string) =>
+    pullGitRemote(approvedGitCwd(cwd), remote),
+  );
+  ipcMain.handle("git:push-plan", (_event, cwd: string, remote?: string) =>
+    readGitPushPlan(approvedGitCwd(cwd), remote),
+  );
+  ipcMain.handle(
+    "git:push",
+    (_event, cwd: string, options?: { remote?: string; allowProtected?: boolean; expectedBranch?: string }) =>
+      pushGitBranch(approvedGitCwd(cwd), options ?? {}),
+  );
+  ipcMain.handle("git:blame", (_event, cwd: string, filePath: string) =>
+    readGitBlame(approvedGitCwd(cwd), filePath),
   );
 
   ipcMain.handle("knowledge:get", (_event, projectPath: string) => knowledgeService.get(projectPath));

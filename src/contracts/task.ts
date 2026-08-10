@@ -5,8 +5,15 @@ import type { AgentCliId } from "./agent";
  * actions: `blocked` is a missing precondition the user must fix (no project
  * folder, no CLI on PATH), `failed` is a run that was attempted and lost. Only
  * `failed` participates in the retry policy.
+ *
+ * `queued` and `investigating` are distinct for the same reason.
+ * `AgentProcessManager` admits three concurrent runs and queues the rest, so a
+ * scheduled task can be accepted minutes before a child process exists. Reporting
+ * that as `investigating` claimed work that had not started: the card showed an
+ * agent thinking, the terminal was empty, and the stall sweeper had to special-case
+ * it to avoid reaping a run that was merely waiting its turn.
  */
-export type TaskStatus = "open" | "investigating" | "blocked" | "failed" | "done";
+export type TaskStatus = "open" | "queued" | "investigating" | "blocked" | "failed" | "done";
 
 export type TaskDifficulty = "small" | "medium" | "large" | "epic";
 

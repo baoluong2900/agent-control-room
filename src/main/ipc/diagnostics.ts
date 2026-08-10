@@ -27,6 +27,11 @@ export type DiagnosticsDependencies = {
   pingCli?: typeof pingAgentCli;
   checkExternalTool?: typeof checkTool;
   checkProject?: typeof collectProjectChecks;
+  /**
+   * Injection seam: runs a CLI's quota-safe smoke command. Stubbed in tests so the
+   * suite neither spawns real CLIs nor depends on which ones are installed.
+   */
+  runSmoke?: SmokeRunner;
   /** Injection seam: the live gateway probe, so tests never touch the network. */
   probeEndpoint?: EndpointProbe;
   /** Current sidecar lifecycle state; omitted when the app has no sidecar manager. */
@@ -66,15 +71,7 @@ export async function collectDiagnostics(
         detail: ping.detail,
         checks: [
           installedCheck(id, descriptor?.displayName ?? id, ping.installed, ping.detail),
-          {
-            key: `tool:${id}:smoke`,
-            label: "Runnable smoke test",
-            status: "unknown",
-            detail: "This CLI does not declare a quota-safe smoke test, so Diagnostics did not spend provider quota.",
-            action: descriptor?.docsUrl
-              ? { label: "Open CLI docs", target: "docs", value: descriptor.docsUrl }
-              : undefined,
-          },
+          await runSmokeCheck(id, descriptor, ping.installed, dependencies.runSmoke),
         ],
       };
     }),
@@ -435,9 +432,137 @@ async function resolveBinary(command: string): Promise<string | null> {
   });
 }
 
+/**
+ * Runs a descriptor's quota-safe smoke test and turns it into one check.
+ *
+ * Never `fail`, only `warn`, when the probe does not pass: Diagnostics is
+ * read-only advice, and a CLI whose local command misbehaves is degraded rather
+ * than broken — it may still run perfectly for an actual prompt. `unknown` is
+ * reserved for "we did not look", which is the honest answer both for a CLI that
+ * declares no probe and for one that is not installed at all.
+ */
+export async function runSmokeCheck(
+  id: AgentCliId,
+  descriptor: AgentCliDescriptor | undefined,
+  installed: boolean,
+  runner: SmokeRunner = defaultSmokeRunner,
+): Promise<DiagnosticCheck> {
+  const key = `tool:${id}:smoke`;
+  const label = "Runnable smoke test";
+  const docsAction: DiagnosticCheck["action"] = descriptor?.docsUrl
+    ? { label: "Open CLI docs", target: "docs", value: descriptor.docsUrl }
+    : undefined;
+
+  if (!descriptor?.smokeTest) {
+    return {
+      key,
+      label,
+      status: "unknown",
+      // Says which of the two reasons applies. The previous wording ("does not
+      // declare") read as an unfinished feature even for CLIs that genuinely have
+      // no command that can be run without billing the user.
+      detail: "This CLI has no command that can be exercised without spending provider quota, so Diagnostics did not try.",
+      action: docsAction,
+    };
+  }
+
+  if (!installed) {
+    return {
+      key,
+      label,
+      status: "unknown",
+      detail: "The binary is not on PATH, so its smoke test was not run. Install the CLI first.",
+      action: docsAction,
+    };
+  }
+
+  const { args, expect, proves } = descriptor.smokeTest;
+  const command = await resolveBinaryFrom(descriptor);
+  if (!command) {
+    return {
+      key,
+      label,
+      status: "unknown",
+      detail: "The binary could not be resolved on PATH, so its smoke test was not run.",
+      action: docsAction,
+    };
+  }
+
+  const result = await runner(command, args);
+  const printed = `${command} ${args.join(" ")}`;
+
+  if (result.timedOut) {
+    return {
+      key,
+      label,
+      status: "warn",
+      detail: `\`${printed}\` did not finish in time, so usability could not be confirmed.`,
+      action: docsAction,
+    };
+  }
+  if (!result.ok) {
+    return {
+      key,
+      label,
+      status: "warn",
+      detail: `\`${printed}\` failed${result.output ? `: ${firstLine(result.output)}` : "."}`,
+      action: docsAction,
+    };
+  }
+  // Exit code alone is not enough. Several CLIs here exit 0 while printing a usage
+  // banner or "you are not authenticated", which proves nothing about usability.
+  if (expect && !result.output.toLowerCase().includes(expect.toLowerCase())) {
+    return {
+      key,
+      label,
+      status: "warn",
+      detail: `\`${printed}\` exited cleanly but its output did not look like a real answer, so usability is unconfirmed.`,
+      action: docsAction,
+    };
+  }
+
+  return { key, label, status: "ok", detail: proves };
+}
+
+/** Injection seam for the smoke runner, so tests never spawn a real CLI. */
+export type SmokeRunner = (command: string, args: string[]) => Promise<CommandOutput>;
+
+/**
+ * Smoke commands get a longer budget than `--version`. Measured on this machine,
+ * `kiro-cli chat --list-sessions -f json` takes ~3.8s: the 2.5s version budget
+ * would have reported a perfectly healthy CLI as timing out.
+ */
+const SMOKE_TIMEOUT_MS = 8_000;
+
+function defaultSmokeRunner(command: string, args: string[]): Promise<CommandOutput> {
+  return readCommandOutput(command, args, { timeoutMs: SMOKE_TIMEOUT_MS, keepFullOutput: true });
+}
+
+/** First resolvable binary from a descriptor's candidate list. */
+async function resolveBinaryFrom(descriptor: AgentCliDescriptor): Promise<string | null> {
+  for (const candidate of descriptor.commandCandidates) {
+    const resolved = await resolveBinary(candidate);
+    if (resolved) return candidate;
+  }
+  return null;
+}
+
 type CommandOutput = { ok: boolean; output: string; timedOut: boolean };
 
-async function readCommandOutput(command: string, args: string[]): Promise<CommandOutput> {
+/**
+ * `keepFullOutput` exists because the two callers want different things: a version
+ * check wants the one line it prints, while a smoke check has to match a substring
+ * that may appear on any line (a table header, a JSON array a few lines down).
+ * Collapsing to the first line would make the `expect` match unreliable.
+ */
+async function readCommandOutput(
+  command: string,
+  args: string[],
+  options: { timeoutMs?: number; keepFullOutput?: boolean } = {},
+): Promise<CommandOutput> {
+  const timeoutMs = options.timeoutMs ?? 2_500;
+  const shape = (value: string) => (options.keepFullOutput ? value.trim() : firstLine(value));
+
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       windowsHide: true,
@@ -453,8 +578,8 @@ async function readCommandOutput(command: string, args: string[]): Promise<Comma
     };
     const timeout = setTimeout(() => {
       child.kill();
-      finish({ ok: false, output: firstLine(output), timedOut: true });
-    }, 2_500);
+      finish({ ok: false, output: shape(output), timedOut: true });
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString();
@@ -463,7 +588,7 @@ async function readCommandOutput(command: string, args: string[]): Promise<Comma
       output += chunk.toString();
     });
     child.on("error", (error) => finish({ ok: false, output: error.message, timedOut: false }));
-    child.on("exit", (code) => finish({ ok: code === 0, output: firstLine(output), timedOut: false }));
+    child.on("exit", (code) => finish({ ok: code === 0, output: shape(output), timedOut: false }));
   });
 }
 

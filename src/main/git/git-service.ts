@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import process from "node:process";
 import type {
+  GitBlameLine,
+  GitBlameResult,
   GitBranchSummary,
   GitCommitSummary,
   GitDiffSummary,
@@ -9,9 +12,31 @@ import type {
   GitFileChangeKind,
   GitFileDiff,
   GitOperationResult,
+  GitPushPlan,
+  GitRemoteSummary,
   GitStashDetail,
   GitStashEntry,
+  GitTrackingStatus,
 } from "@contracts";
+
+/**
+ * Budget for operations that talk to a remote.
+ *
+ * The local-plumbing default (5s) is wrong for these: a cold TLS handshake plus a
+ * large pack legitimately exceeds it, and killing a `push` mid-transfer leaves the
+ * user unable to tell whether the objects landed. 60s is long enough for real work
+ * and short enough that a wedged connection still ends in a reported failure
+ * rather than a spinner with no end.
+ */
+const NETWORK_TIMEOUT_MS = 60_000;
+
+/**
+ * Branches a push refuses to touch unless the caller opts in explicitly.
+ *
+ * Not a security control — it is a typo guard. Publishing to a shared trunk from a
+ * side panel is the one push people regret, so it takes a deliberate second action.
+ */
+const PROTECTED_BRANCHES = new Set(["main", "master"]);
 
 type GitResult = {
   ok: boolean;
@@ -364,6 +389,381 @@ export async function dropGitStash(cwd: string, ref: string, expectedOid: string
 }
 
 /**
+ * Configured remotes with their fetch URLs.
+ *
+ * `remote -v` rather than `remote`: the URL is what tells a user *where* an
+ * outbound action would send their code, and "origin" alone does not.
+ */
+export async function readGitRemotes(cwd: string): Promise<GitRemoteSummary[]> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return [];
+
+  const result = await git(cwd, ["remote", "-v"]);
+  if (!result.ok || !result.output.trim()) return [];
+
+  const remotes = new Map<string, GitRemoteSummary>();
+  for (const line of result.output.split(/\r?\n/)) {
+    // `name<TAB>url (fetch|push)` — keep the fetch URL; a triangular workflow can
+    // set a different push URL, and showing that as "the remote" would mislead.
+    const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/.exec(line.trim());
+    if (!match) continue;
+    const [, name, url, kind] = match;
+    if (!remotes.has(name)) remotes.set(name, { name });
+    if (kind === "fetch") remotes.get(name)!.fetchUrl = url;
+  }
+  return [...remotes.values()];
+}
+
+/**
+ * How far the checked-out branch has diverged from its upstream.
+ *
+ * `rev-list --left-right --count` in one call rather than two counting calls: it
+ * cannot report an ahead/behind pair drawn from two different moments.
+ *
+ * Reads the *local* view only — `behind` stays at 0 until a fetch updates the
+ * remote-tracking ref, which is exactly why the UI offers fetch first instead of
+ * claiming a branch is up to date.
+ */
+export async function readGitTracking(cwd: string): Promise<GitTrackingStatus | null> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return null;
+
+  const branch = (await git(cwd, ["branch", "--show-current"])).output.trim();
+  if (!branch) return null;
+
+  const upstreamResult = await git(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
+  // `rev-parse` echoes its argument back for a ref it cannot resolve, so a
+  // successful exit is not enough — an output still containing `@{upstream}`
+  // means there is no upstream, not that the upstream is literally named that.
+  const upstream = upstreamResult.ok ? upstreamResult.output.trim() : "";
+  if (!upstream || upstream.includes("@{upstream}")) {
+    return { branch, ahead: 0, behind: 0 };
+  }
+
+  const counts = await git(cwd, ["rev-list", "--left-right", "--count", `${upstream}...HEAD`]);
+  if (!counts.ok) return { branch, upstream, ahead: 0, behind: 0 };
+
+  // Left side is upstream (behind), right side is HEAD (ahead).
+  const [behind, ahead] = counts.output.trim().split(/\s+/).map((value) => Number.parseInt(value, 10));
+  return {
+    branch,
+    upstream,
+    ahead: Number.isFinite(ahead) ? ahead : 0,
+    behind: Number.isFinite(behind) ? behind : 0,
+  };
+}
+
+/**
+ * `git fetch --prune` — the one outbound operation that cannot lose local work.
+ *
+ * It updates remote-tracking refs only: no worktree change, no local branch moved.
+ * That makes it the safe precondition for everything else here, since ahead/behind
+ * is meaningless until the remote-tracking refs are current.
+ */
+export async function fetchGitRemote(cwd: string, remote?: string): Promise<GitOperationResult> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return operationResult(false, repository.output, cwd);
+
+  const target = resolveRemote(await readGitRemotes(cwd), remote);
+  if ("reason" in target) return operationResult(false, target.reason, cwd);
+
+  const result = await git(cwd, ["fetch", "--prune", target.name], NETWORK_TIMEOUT_MS);
+  if (!result.ok) return operationResult(false, result.output || `Unable to fetch ${target.name}`, cwd);
+
+  const tracking = await readGitTracking(cwd);
+  // `fetch` is quiet on success, so echoing its output would report an empty
+  // message for the common case. State the resulting divergence instead — that is
+  // the answer the user fetched for.
+  return operationResult(true, `Fetched ${target.name}. ${describeTracking(tracking)}`, cwd);
+}
+
+/**
+ * `git pull --ff-only`.
+ *
+ * Fast-forward only, deliberately. A merge or rebase pull can stop halfway with
+ * conflict markers in the tree, and this app has no conflict-resolution UI to
+ * finish the job — leaving a user mid-conflict is worse than refusing to pull.
+ * Refuses on a dirty tree for the same reason `checkoutGitBranch` does.
+ */
+export async function pullGitRemote(cwd: string, remote?: string): Promise<GitOperationResult> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return operationResult(false, repository.output, cwd);
+
+  const tracking = await readGitTracking(cwd);
+  if (!tracking) return operationResult(false, "No branch is checked out", cwd);
+  if (!tracking.upstream) {
+    return operationResult(false, `${tracking.branch} has no upstream to pull from`, cwd);
+  }
+
+  if (await hasUncommittedChanges(cwd)) {
+    return operationResult(
+      false,
+      "Uncommitted changes would be overwritten by a pull. Commit or stash them first.",
+      cwd,
+    );
+  }
+
+  const target = resolveRemote(await readGitRemotes(cwd), remote);
+  if ("reason" in target) return operationResult(false, target.reason, cwd);
+
+  const result = await git(cwd, ["pull", "--ff-only", target.name], NETWORK_TIMEOUT_MS);
+  if (!result.ok) {
+    // The overwhelmingly common failure is divergence, and git's own wording for
+    // it ("Not possible to fast-forward") does not say what to do about it.
+    const diverged = /not possible to fast-forward|diverged/i.test(result.output);
+    return operationResult(
+      false,
+      diverged
+        ? `${tracking.branch} and ${tracking.upstream} have diverged. Rebase or merge manually — this app only fast-forwards.`
+        : result.output || "Pull failed",
+      cwd,
+    );
+  }
+
+  const after = await readGitTracking(cwd);
+  return operationResult(true, `Pulled ${target.name}. ${describeTracking(after)}`, cwd);
+}
+
+/**
+ * Resolves exactly what a push would do, without doing it.
+ *
+ * Split from `pushGitBranch` on purpose: the confirmation dialog and the push
+ * itself must agree about the remote, the branch, the commit count and whether an
+ * upstream would be created. Computing that twice, in two layers, is how a dialog
+ * ends up describing a different push from the one that runs.
+ */
+export async function readGitPushPlan(cwd: string, remote?: string): Promise<GitPushPlan> {
+  const remotes = await readGitRemotes(cwd);
+  // No remote name: every path that reaches here has either no usable remote or no
+  // branch to push, so naming one would imply a target the plan does not have.
+  const empty = (reason: string, branch = ""): GitPushPlan => ({
+    pushable: false,
+    branch,
+    remote: "",
+    remotes,
+    createsUpstream: false,
+    protectedBranch: PROTECTED_BRANCHES.has(branch),
+    reason,
+  });
+
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return empty(repository.output);
+
+  const tracking = await readGitTracking(cwd);
+  if (!tracking) return empty("No branch is checked out (detached HEAD cannot be pushed by name)");
+
+  const target = resolveRemote(remotes, remote);
+  if ("reason" in target) return empty(target.reason, tracking.branch);
+  const remoteName = target.name;
+
+  // An upstream on a *different* remote tells us nothing about how far ahead we
+  // are of the remote being pushed to, so count against that remote's own ref.
+  const upstreamOnTarget = tracking.upstream?.startsWith(`${remoteName}/`) ? tracking.upstream : undefined;
+  const remoteRef = `refs/remotes/${remoteName}/${tracking.branch}`;
+  const remoteRefExists = (await git(cwd, ["rev-parse", "--verify", "--quiet", remoteRef])).ok;
+
+  let ahead: number | undefined;
+  let behind: number | undefined;
+  if (remoteRefExists) {
+    const counts = await git(cwd, ["rev-list", "--left-right", "--count", `${remoteRef}...HEAD`]);
+    if (counts.ok) {
+      const [b, a] = counts.output.trim().split(/\s+/).map((value) => Number.parseInt(value, 10));
+      ahead = Number.isFinite(a) ? a : undefined;
+      behind = Number.isFinite(b) ? b : undefined;
+    }
+  } else {
+    // Nothing on the remote yet: every commit on this branch would be published.
+    const total = await git(cwd, ["rev-list", "--count", "HEAD"]);
+    const parsed = Number.parseInt(total.output.trim(), 10);
+    ahead = total.ok && Number.isFinite(parsed) ? parsed : undefined;
+    behind = 0;
+  }
+
+  return {
+    pushable: true,
+    branch: tracking.branch,
+    remote: remoteName,
+    remotes,
+    upstream: upstreamOnTarget ?? tracking.upstream,
+    createsUpstream: !upstreamOnTarget,
+    ahead,
+    behind,
+    protectedBranch: PROTECTED_BRANCHES.has(tracking.branch),
+  };
+}
+
+/**
+ * Pushes the current branch. The only operation here that sends data off the machine.
+ *
+ * Re-resolves the plan rather than trusting arguments from the renderer: the branch
+ * can have changed between rendering the confirmation and clicking it, and pushing
+ * a branch the user did not read about in the dialog is exactly the mistake the
+ * dialog exists to prevent.
+ *
+ * Never `--force`. A force push can destroy commits on the remote that no local
+ * clone has, which is not an operation to expose behind a side-panel button.
+ */
+export async function pushGitBranch(
+  cwd: string,
+  options: { remote?: string; allowProtected?: boolean; expectedBranch?: string } = {},
+): Promise<GitOperationResult> {
+  const plan = await readGitPushPlan(cwd, options.remote);
+  if (!plan.pushable) return operationResult(false, plan.reason ?? "Nothing to push", cwd);
+
+  const expected = options.expectedBranch?.trim();
+  if (expected && expected !== plan.branch) {
+    return operationResult(
+      false,
+      `The checked-out branch is now ${plan.branch}, not ${expected}. Refresh before pushing.`,
+      cwd,
+    );
+  }
+
+  if (plan.protectedBranch && !options.allowProtected) {
+    return operationResult(
+      false,
+      `${plan.branch} is a protected branch. Confirm the protected-branch toggle to push it.`,
+      cwd,
+    );
+  }
+
+  if (plan.ahead === 0 && !plan.createsUpstream) {
+    return operationResult(true, `${plan.remote}/${plan.branch} is already up to date.`, cwd);
+  }
+
+  const args = ["push"];
+  if (plan.createsUpstream) args.push("--set-upstream");
+  // Name the local branch and the remote branch explicitly. A bare `git push`
+  // obeys `push.default`, which under `matching` pushes *other* branches too.
+  args.push(plan.remote, `${plan.branch}:${plan.branch}`);
+
+  const result = await git(cwd, args, NETWORK_TIMEOUT_MS);
+  if (!result.ok) {
+    const rejected = /\[rejected\]|non-fast-forward|fetch first/i.test(result.output);
+    return operationResult(
+      false,
+      rejected
+        ? `${plan.remote} rejected the push: it has commits ${plan.branch} does not. Fetch and pull first.`
+        : result.output || "Push failed",
+      cwd,
+    );
+  }
+
+  const published = plan.ahead ?? 0;
+  const noun = published === 1 ? "commit" : "commits";
+  return operationResult(
+    true,
+    `Pushed ${published} ${noun} to ${plan.remote}/${plan.branch}${plan.createsUpstream ? " and set it as upstream" : ""}.`,
+    cwd,
+  );
+}
+
+/**
+ * Line-level authorship for one file.
+ *
+ * `--line-porcelain` repeats every header per line, which is verbose on the wire
+ * but means each line can be parsed without carrying state across commit blocks —
+ * the abbreviated form omits repeated headers and needs that state.
+ */
+export async function readGitBlame(cwd: string, filePath: string): Promise<GitBlameResult> {
+  const repository = await ensureRepository(cwd);
+  if (!repository.ok) return { cwd, path: filePath, lines: [], error: repository.output };
+
+  const safePath = sanitizeRepoPath(filePath);
+  if (!safePath) return { cwd, path: filePath, lines: [], error: "Invalid repository path" };
+
+  const result = await git(cwd, ["blame", "--line-porcelain", "HEAD", "--", safePath]);
+  if (!result.ok) {
+    return { cwd, path: safePath, lines: [], error: result.output || "Unable to blame this file" };
+  }
+
+  return { cwd, path: safePath, lines: parseBlamePorcelain(result.output) };
+}
+
+/**
+ * Picks the remote to act on, or explains why none can be.
+ *
+ * Takes the already-read remote list rather than reading it again: `readGitRemotes`
+ * costs a `git remote -v` plus a repository check, and `readGitPushPlan` needs the
+ * full list anyway to render a chooser. Returning the name or the reason from one
+ * place is what keeps "which remote would this use" from being answered twice with
+ * two subtly different rules.
+ */
+function resolveRemote(remotes: GitRemoteSummary[], remote?: string): { name: string } | { reason: string } {
+  if (remotes.length === 0) return { reason: "No remote is configured" };
+
+  const requested = remote?.trim();
+  if (!requested) {
+    // `origin` by convention, otherwise the only/first one configured.
+    return { name: remotes.find((entry) => entry.name === "origin")?.name ?? remotes[0].name };
+  }
+  if (!remotes.some((entry) => entry.name === requested)) return { reason: `Unknown remote ${requested}` };
+  return { name: requested };
+}
+
+/** One sentence describing divergence, for appending to an operation message. */
+function describeTracking(tracking: GitTrackingStatus | null): string {
+  if (!tracking) return "";
+  if (!tracking.upstream) return `${tracking.branch} has no upstream.`;
+  if (tracking.ahead === 0 && tracking.behind === 0) return `${tracking.branch} is up to date with ${tracking.upstream}.`;
+
+  const parts: string[] = [];
+  if (tracking.ahead > 0) parts.push(`${tracking.ahead} ahead`);
+  if (tracking.behind > 0) parts.push(`${tracking.behind} behind`);
+  return `${tracking.branch} is ${parts.join(", ")} of ${tracking.upstream}.`;
+}
+
+/**
+ * Parses `git blame --line-porcelain`.
+ *
+ * Each line begins with `<sha> <origLine> <finalLine>[ <groupSize>]`, followed by
+ * repeated headers, and ends with the source line prefixed by a TAB. The TAB
+ * prefix is the only reliable content marker: a header value can otherwise look
+ * like source, and source can look like a header.
+ */
+function parseBlamePorcelain(output: string): GitBlameLine[] {
+  const lines: GitBlameLine[] = [];
+  let current: Partial<GitBlameLine> & { hash?: string } = {};
+
+  for (const raw of output.split(/\r?\n/)) {
+    const header = /^([0-9a-f]{40,64}) \d+ (\d+)(?: \d+)?$/.exec(raw);
+    if (header) {
+      current = { hash: header[1], line: Number.parseInt(header[2], 10) };
+      continue;
+    }
+    if (raw.startsWith("author ")) {
+      current.author = raw.slice("author ".length);
+      continue;
+    }
+    if (raw.startsWith("author-time ")) {
+      const seconds = Number.parseInt(raw.slice("author-time ".length), 10);
+      if (Number.isFinite(seconds)) current.date = new Date(seconds * 1000).toISOString();
+      continue;
+    }
+    if (raw.startsWith("summary ")) {
+      current.summary = raw.slice("summary ".length);
+      continue;
+    }
+    if (raw.startsWith("\t")) {
+      if (current.hash && current.line) {
+        lines.push({
+          hash: current.hash,
+          shortHash: current.hash.slice(0, 7),
+          line: current.line,
+          author: current.author ?? "",
+          date: current.date ?? "",
+          summary: current.summary ?? "",
+          content: raw.slice(1),
+        });
+      }
+      current = {};
+    }
+  }
+
+  return lines;
+}
+
+/**
  * True when the work tree or index carries changes that a checkout or stash
  * restore could disturb. Untracked files are excluded: git carries them across a
  * branch switch untouched, so blocking on them would refuse safe operations.
@@ -540,20 +940,41 @@ function unquote(pathValue: string): string {
  * Runs one git command and never rejects.
  *
  * Exported so other main-process services (the ref-change trigger runner) reuse
- * this exact invocation — same 5s timeout, same never-throw contract — rather than
- * growing a second, subtly different git helper.
+ * this exact invocation — same never-throw contract — rather than growing a
+ * second, subtly different git helper.
+ *
+ * `timeoutMs` defaults to a budget tuned for local plumbing: every read here
+ * answers from `.git` in milliseconds, so 5s means "something is wedged".
+ * Network operations (`fetch`, `pull`, `push`) legitimately take longer on a
+ * cold TLS handshake or a large pack, and killing them at 5s would surface as a
+ * spurious failure against a perfectly healthy remote — worse, a killed `push`
+ * leaves the user unsure whether the objects landed. Those callers pass their own.
  */
-export function git(cwd: string, args: string[]): Promise<GitResult> {
+export function git(cwd: string, args: string[], timeoutMs = 5_000): Promise<GitResult> {
   return new Promise((resolve) => {
     const child = spawn("git", args, {
       cwd,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        // Never let git stop for input. Without this a missing credential turns
+        // a fetch into a child blocked forever on a username prompt that has no
+        // terminal to appear on, and the operation only ends when the timeout
+        // kills it — reported as a timeout rather than "you are not authenticated".
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ASKPASS: "",
+        SSH_ASKPASS: "",
+      },
     });
 
     let stdout = "";
     let stderr = "";
-    const timeout = setTimeout(() => child.kill(), 5_000);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -567,7 +988,12 @@ export function git(cwd: string, args: string[]): Promise<GitResult> {
     });
     child.on("exit", (code) => {
       clearTimeout(timeout);
+      if (timedOut) {
+        resolve({ ok: false, output: `git ${args[0]} timed out after ${Math.round(timeoutMs / 1000)}s` });
+        return;
+      }
       resolve({ ok: code === 0, output: code === 0 ? stdout : stderr || stdout });
     });
   });
 }
+

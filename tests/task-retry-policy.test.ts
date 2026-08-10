@@ -241,6 +241,88 @@ test("a failed agent run marks the task failed, not blocked", async () => {
   db.close();
 });
 
+test("a task waiting behind the concurrency limit reads as queued, not investigating", async () => {
+  const db = await openDb("queued-state");
+  const task = db.saveTask({
+    projectPath: process.cwd(),
+    title: "Waiting its turn",
+    prompt: "noop",
+    status: "open",
+    assignedCliId: "shell",
+    automationEnabled: true,
+  });
+
+  db.createAgentRun({
+    id: "run-waiting",
+    cliId: "shell",
+    cwd: process.cwd(),
+    prompt: "noop",
+    taskId: task.id,
+    status: "queued",
+    startedAt: new Date().toISOString(),
+  });
+  db.markTaskRunStarted(task.id, "run-waiting");
+
+  const enqueued = db.getTask(task.id);
+  assert.equal(enqueued?.status, "queued", "accepting a run must not claim an agent is working");
+  assert.equal(enqueued?.runCount, 1, "the attempt still counts as a run");
+  assert.equal(enqueued?.lastRunId, "run-waiting");
+
+  // A queued task is not a stall candidate at all: it has produced no output
+  // because no process exists, so a silence window means nothing for it.
+  assert.deepEqual(
+    db.listStalledTaskCandidates(new Date(Date.now() + 60_000).toISOString()).map((entry) => entry.id),
+    [],
+    "a queued task must be invisible to the stall sweeper",
+  );
+
+  const spawned = db.markTaskRunSpawned(task.id, "run-waiting");
+  assert.equal(spawned?.status, "investigating", "the promotion happens when the child actually exists");
+  assert.deepEqual(
+    db.listStalledTaskCandidates(new Date(Date.now() + 60_000).toISOString()).map((entry) => entry.id),
+    [task.id],
+    "once running, the task is subject to the stall window like any other",
+  );
+
+  db.close();
+});
+
+test("promotion is scoped to the run that spawned and to queued tasks only", async () => {
+  const db = await openDb("queued-scope");
+  const task = db.saveTask({
+    projectPath: process.cwd(),
+    title: "Scoped promotion",
+    prompt: "noop",
+    status: "open",
+    assignedCliId: "shell",
+    automationEnabled: true,
+  });
+
+  db.createAgentRun({
+    id: "run-current",
+    cliId: "shell",
+    cwd: process.cwd(),
+    prompt: "noop",
+    taskId: task.id,
+    status: "queued",
+    startedAt: new Date().toISOString(),
+  });
+  db.markTaskRunStarted(task.id, "run-current");
+
+  // A late callback from a superseded run must not drag the task into a running
+  // state: it would claim a process that belongs to a different attempt.
+  const stale = db.markTaskRunSpawned(task.id, "run-abandoned");
+  assert.equal(stale?.status, "queued", "a spawn callback from another run must not promote the task");
+
+  // Nor may one resurrect a task that has already been settled.
+  db.finishTaskRun(task.id, "failed", "run-current");
+  assert.equal(db.getTask(task.id)?.status, "failed");
+  const resurrected = db.markTaskRunSpawned(task.id, "run-current");
+  assert.equal(resurrected?.status, "failed", "a settled task must not be pulled back into investigating");
+
+  db.close();
+});
+
 test("a hung run is reaped while a slow but talkative one is left alone", async () => {
   const db = await openDb("stall");
   const manager = new AgentProcessManager(db, () => null);
@@ -277,7 +359,11 @@ test("a hung run is reaped while a slow but talkative one is left alone", async 
       status: "planning",
       startedAt,
     });
+    // Both steps of the production sequence: a run is enqueued (`queued`) and then
+    // promoted when its child spawns (`investigating`). Only the second state is a
+    // stall candidate, so skipping the promotion here would test nothing.
     db.markTaskRunStarted(taskId, runId);
+    db.markTaskRunSpawned(taskId, runId);
   }
 
   // The silence window is shrunk to a second so the two cases separate without

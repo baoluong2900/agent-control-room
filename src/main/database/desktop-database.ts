@@ -31,7 +31,6 @@ import type {
 import { logRetention, truncateLogMessage } from "./log-retention";
 import { DEFAULT_MAX_ATTEMPTS } from "../tasks/retry-policy";
 import { appMigrations, runMigrations, schemaVersion, type AppliedMigration } from "./migrations";
-import { ensureColumns } from "./sqlite-types";
 import type { SqliteDatabase } from "./sqlite-types";
 import { WorkflowRepository } from "./workflow-repository";
 
@@ -1096,12 +1095,22 @@ export class DesktopDatabase {
     return row?.createdAt ?? null;
   }
 
+  /**
+   * Records that a run was accepted for this task. The task becomes `queued`, not
+   * `investigating`: `AgentProcessManager` admits three concurrent runs, so a run
+   * accepted now may not spawn a child for minutes. Claiming `investigating` here
+   * showed an agent working while the terminal stayed empty.
+   *
+   * `last_run_at` is still stamped now, because it is the enqueue time the stall
+   * sweeper measures against — but that sweeper only considers `investigating`
+   * rows, so a run waiting its turn can no longer be reaped for silence.
+   */
   markTaskRunStarted(id: string, runId: string): TaskRecord {
     const now = new Date().toISOString();
     this.db
       .prepare(
         `update tasks
-         set status = 'investigating',
+         set status = 'queued',
              completed_at = null,
              last_run_at = ?,
              last_run_id = ?,
@@ -1112,6 +1121,29 @@ export class DesktopDatabase {
     const saved = this.getTask(id);
     if (!saved) throw new Error(`Task ${id} was not found.`);
     return saved;
+  }
+
+  /**
+   * Promotes a queued task to `investigating` once its child process exists.
+   *
+   * Scoped to the run that actually spawned (`last_run_id = ?`) and to `queued`
+   * rows: a retry enqueued after this one already owns the task, and a task the
+   * user stopped or that already failed must not be dragged back into a running
+   * state by a late spawn callback. `last_run_at` is restamped so the stall window
+   * measures silence from the spawn, not from the enqueue — otherwise a run that
+   * waited out the window behind the concurrency limit would be reaped on its first
+   * tick as an agent alive for seconds.
+   */
+  markTaskRunSpawned(id: string, runId: string): TaskRecord | null {
+    this.db
+      .prepare(
+        `update tasks
+         set status = 'investigating',
+             last_run_at = ?
+         where id = ? and last_run_id = ? and status = 'queued'`,
+      )
+      .run(new Date().toISOString(), id, runId);
+    return this.getTask(id);
   }
 
   /**
@@ -1554,27 +1586,17 @@ export class DesktopDatabase {
       );
     `);
 
-    this.ensureColumn("agent_runs", "profile_id", "text");
-    this.ensureColumn("agent_runs", "task_id", "text");
-    this.ensureColumn("agent_runs", "conversation_id", "text");
-    this.ensureColumn("agent_profiles", "provider_connection_id", "text");
-    this.ensureColumn("agent_profiles", "module", "text");
-    this.ensureColumn("agent_profiles", "options", "text");
-    ensureColumns(this.db, "tasks", [
-      { name: "parent_task_id", ddl: "text" },
-      { name: "assigned_cli_id", ddl: "text" },
-      { name: "assigned_model", ddl: "text" },
-      { name: "due_at", ddl: "text" },
-      { name: "difficulty", ddl: "text" },
-      { name: "estimated_minutes", ddl: "integer" },
-      { name: "automation_enabled", ddl: "integer not null default 0" },
-      { name: "last_run_at", ddl: "text" },
-      { name: "last_run_id", ddl: "text" },
-      { name: "run_count", ddl: "integer not null default 0" },
-    ]);
+    // Additive columns are not declared here. Everything that used to be applied
+    // by `ensureColumn`/`ensureColumns` at this point is migration version 9, so
+    // there is exactly one place to look for "when did this column appear".
+    // Nothing new belongs in this method; add a migration version instead.
     this.db.exec(`
-      create index if not exists idx_tasks_due on tasks (automation_enabled, status, due_at);
-      create index if not exists idx_agent_runs_task on agent_runs (task_id, started_at desc);
+      /*
+       * idx_tasks_due and idx_agent_runs_task are deliberately NOT here: they index
+       * columns that migration 9 adds, and on a database predating those columns an
+       * index created in this block would fail before the migration could run. They
+       * are created inside version 9, immediately after their columns exist.
+       */
       create index if not exists idx_provider_connections_user on provider_connections (user_id, status);
       create index if not exists idx_knowledge_snapshots_generated on knowledge_snapshots (generated_at desc);
 
@@ -1614,12 +1636,6 @@ export class DesktopDatabase {
     return this.appliedMigrations;
   }
 
-  /** Adds a column when an older database file predates it. */
-  private ensureColumn(table: string, column: string, type: string): void {
-    const columns = this.db.prepare(`pragma table_info(${table})`).all() as Array<{ name: string }>;
-    if (columns.some((entry) => entry.name === column)) return;
-    this.db.exec(`alter table ${table} add column ${column} ${type}`);
-  }
 }
 
 function hydrateTask(row: TaskRow): TaskRecord {

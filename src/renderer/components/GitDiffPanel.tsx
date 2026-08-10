@@ -1,17 +1,32 @@
-import { Archive, Check, FileDiff, GitBranch, GitCommit, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import {
+  Archive,
+  Check,
+  CloudDownload,
+  CloudUpload,
+  FileDiff,
+  GitBranch,
+  GitCommit,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import type {
+  GitBlameResult,
   GitBranchSummary,
   GitDiffSummary,
   GitFileChange,
   GitFileChangeKind,
   GitFileDiff,
+  GitPushPlan,
   GitStashDetail,
   GitStashEntry,
+  GitTrackingStatus,
   ProjectSummary,
 } from "@contracts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-type PanelView = "files" | "patch" | "stat" | "log" | "branches" | "stashes";
+type PanelView = "files" | "patch" | "blame" | "stat" | "log" | "branches" | "stashes" | "remote";
 
 const kindLabels: Record<GitFileChangeKind, string> = {
   added: "A",
@@ -46,6 +61,12 @@ export function GitDiffPanel({
   const [includeUntracked, setIncludeUntracked] = useState(false);
   const [stashDetail, setStashDetail] = useState<GitStashDetail | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tracking, setTracking] = useState<GitTrackingStatus | null>(null);
+  const [pushPlan, setPushPlan] = useState<GitPushPlan | null>(null);
+  const [selectedRemote, setSelectedRemote] = useState("");
+  const [allowProtectedPush, setAllowProtectedPush] = useState(false);
+  const [blame, setBlame] = useState<GitBlameResult | null>(null);
+  const [loadingBlame, setLoadingBlame] = useState(false);
 
   // Branch and stash lists are read on demand rather than pushed with the diff:
   // both cost their own git invocation, and neither changes while the user is
@@ -60,6 +81,21 @@ export function GitDiffPanel({
     setStashes(await window.agentic.git.stashes(project.path));
   }, [project]);
 
+  /**
+   * Tracking status and the push plan are read together, and always from the main
+   * process. The plan is what the confirmation renders, so recomputing any part of
+   * it here would let the dialog describe a push different from the one that runs.
+   */
+  const loadRemoteState = useCallback(async () => {
+    if (!project) return;
+    const [nextTracking, nextPlan] = await Promise.all([
+      window.agentic.git.tracking(project.path),
+      window.agentic.git.pushPlan(project.path, selectedRemote || undefined),
+    ]);
+    setTracking(nextTracking);
+    setPushPlan(nextPlan);
+  }, [project, selectedRemote]);
+
   const staged = diff?.files.filter((file) => file.staged) ?? [];
   const unstaged = diff?.files.filter((file) => !file.staged) ?? [];
   const selectableKey = selected ? keyFor(selected) : null;
@@ -72,7 +108,8 @@ export function GitDiffPanel({
     if (!selectedStillExists) {
       setSelected(null);
       setFileDiff(null);
-      if (view === "patch") setView("files");
+      setBlame(null);
+      if (view === "patch" || view === "blame") setView("files");
     }
   }, [selectedStillExists, view]);
 
@@ -119,7 +156,27 @@ export function GitDiffPanel({
   useEffect(() => {
     if (view === "branches") void loadBranches();
     if (view === "stashes") void loadStashes();
-  }, [loadBranches, loadStashes, view]);
+    if (view === "remote") void loadRemoteState();
+  }, [loadBranches, loadRemoteState, loadStashes, view]);
+
+  useEffect(() => {
+    if (!project || !selected || view !== "blame") return;
+    let cancelled = false;
+    setLoadingBlame(true);
+    window.agentic.git.blame(project.path, selected.path)
+      .then((next) => {
+        if (!cancelled) setBlame(next);
+      })
+      .catch((error: Error) => {
+        if (!cancelled) setBlame({ cwd: project.path, path: selected.path, lines: [], error: error.message });
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingBlame(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project, selected, view]);
 
   // A stale detail panel would describe a stash the user is no longer looking at,
   // and after a drop the ref it names may belong to a different entry entirely.
@@ -158,7 +215,10 @@ export function GitDiffPanel({
     try {
       const result = await action();
       setOperationMessage(result.message);
-      await Promise.all([onRefresh(), loadBranches(), loadStashes()]);
+      // Remote state is refreshed too: a fetch changes ahead/behind, a pull changes
+      // the file list, and a push changes whether an upstream now exists. Leaving
+      // any of those stale is how a panel shows a push that has already happened.
+      await Promise.all([onRefresh(), loadBranches(), loadStashes(), loadRemoteState()]);
       return result;
     } finally {
       setBusy(false);
@@ -192,10 +252,12 @@ export function GitDiffPanel({
           <div className="git-view-toggle" role="tablist" aria-label="Git panel view">
             <ViewButton active={view === "files"} label="Files" onClick={() => setView("files")} />
             <ViewButton active={view === "patch"} disabled={!selected} label="Patch" onClick={() => setView("patch")} />
+            <ViewButton active={view === "blame"} disabled={!selected} label="Blame" onClick={() => setView("blame")} />
             <ViewButton active={view === "stat"} label="Stat" onClick={() => setView("stat")} />
             <ViewButton active={view === "log"} label="Log" onClick={() => setView("log")} />
             <ViewButton active={view === "branches"} label="Branches" onClick={() => setView("branches")} />
             <ViewButton active={view === "stashes"} label="Stashes" onClick={() => setView("stashes")} />
+            <ViewButton active={view === "remote"} label="Remote" onClick={() => setView("remote")} />
           </div>
           <button className="ghost-button" disabled={!project} onClick={() => void onRefresh()}>
             <RefreshCw size={14} />
@@ -225,8 +287,54 @@ export function GitDiffPanel({
           <pre>{diff.diffStat}</pre>
         ) : view === "patch" ? (
           <PatchView fileDiff={fileDiff} loading={loadingPatch} selected={selected} />
+        ) : view === "blame" ? (
+          <BlameView blame={blame} loading={loadingBlame} selected={selected} />
         ) : view === "log" ? (
           <LogView entries={logEntries} />
+        ) : view === "remote" ? (
+          <RemoteView
+            allowProtected={allowProtectedPush}
+            busy={busy}
+            dirty={diff.unstagedCount + diff.stagedCount > 0}
+            onAllowProtectedChange={setAllowProtectedPush}
+            onFetch={() => void runGitAction(() => window.agentic.git.fetch(project!.path, selectedRemote || undefined))}
+            onPull={() => void runGitAction(() => window.agentic.git.pull(project!.path, selectedRemote || undefined))}
+            onPush={() => {
+              if (!pushPlan?.pushable) return;
+              // Push is the only action here that sends code off the machine, so the
+              // confirmation names the exact remote, branch and commit count from the
+              // plan the main process resolved — not a generic "are you sure".
+              const published = pushPlan.ahead ?? 0;
+              const noun = published === 1 ? "commit" : "commits";
+              const lines = [
+                `Push ${published} ${noun} to ${pushPlan.remote}/${pushPlan.branch}?`,
+                "",
+                `Remote: ${pushPlan.remotes.find((entry) => entry.name === pushPlan.remote)?.fetchUrl ?? pushPlan.remote}`,
+                pushPlan.createsUpstream
+                  ? `This creates ${pushPlan.remote}/${pushPlan.branch} and sets it as upstream.`
+                  : `Upstream: ${pushPlan.upstream ?? `${pushPlan.remote}/${pushPlan.branch}`}`,
+              ];
+              if (pushPlan.protectedBranch) lines.push("", `${pushPlan.branch} is a protected branch.`);
+              if ((pushPlan.behind ?? 0) > 0) {
+                lines.push("", `${pushPlan.remote} is ${pushPlan.behind} ahead — this push will be rejected. Pull first.`);
+              }
+              if (window.confirm(lines.join("\n"))) {
+                void runGitAction(() =>
+                  window.agentic.git.push(project!.path, {
+                    remote: selectedRemote || undefined,
+                    allowProtected: allowProtectedPush,
+                    // HEAD can move between rendering this dialog and clicking it;
+                    // the backend refuses rather than pushing an unmentioned branch.
+                    expectedBranch: pushPlan.branch,
+                  }),
+                );
+              }
+            }}
+            onRemoteChange={setSelectedRemote}
+            plan={pushPlan}
+            selectedRemote={selectedRemote}
+            tracking={tracking}
+          />
         ) : view === "branches" ? (
           <BranchView
             branches={branches}
@@ -400,6 +508,181 @@ function PatchView({
   if (loading) return <p className="git-empty">Loading patch…</p>;
   if (fileDiff?.error) return <pre>{fileDiff.error}</pre>;
   return <pre>{fileDiff?.patch || "No patch for this file."}</pre>;
+}
+
+function BlameView({
+  blame,
+  loading,
+  selected,
+}: {
+  blame: GitBlameResult | null;
+  loading: boolean;
+  selected: GitFileChange | null;
+}) {
+  if (!selected) return <p className="git-empty">Select a file to see who last touched each line.</p>;
+  if (loading) return <p className="git-empty">Reading blame…</p>;
+  if (blame?.error) return <p className="git-empty">{blame.error}</p>;
+  if (!blame || blame.lines.length === 0) return <p className="git-empty">No blame data for this file.</p>;
+
+  return (
+    <div className="git-blame-list">
+      {blame.lines.map((line) => (
+        <div className="git-blame-row" key={`${line.line}-${line.hash}`} title={`${line.shortHash} · ${line.summary}`}>
+          <em className="git-blame-meta">
+            {line.shortHash} {line.author}
+          </em>
+          <span className="git-blame-line">{line.line}</span>
+          <code>{line.content || " "}</code>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Fetch, pull and push.
+ *
+ * Ordered by how much they can cost you: fetch changes nothing local, pull only
+ * fast-forwards, push is the one that publishes. Every number shown here comes from
+ * the plan the main process resolved, so the panel cannot promise a push that
+ * differs from the one the backend performs.
+ */
+function RemoteView({
+  allowProtected,
+  busy,
+  dirty,
+  onAllowProtectedChange,
+  onFetch,
+  onPull,
+  onPush,
+  onRemoteChange,
+  plan,
+  selectedRemote,
+  tracking,
+}: {
+  allowProtected: boolean;
+  busy: boolean;
+  dirty: boolean;
+  onAllowProtectedChange: (value: boolean) => void;
+  onFetch: () => void;
+  onPull: () => void;
+  onPush: () => void;
+  onRemoteChange: (value: string) => void;
+  plan: GitPushPlan | null;
+  selectedRemote: string;
+  tracking: GitTrackingStatus | null;
+}) {
+  const remotes = plan?.remotes ?? [];
+  const behind = tracking?.behind ?? 0;
+  const ahead = plan?.ahead ?? tracking?.ahead ?? 0;
+  const protectedBlocked = Boolean(plan?.protectedBranch) && !allowProtected;
+
+  if (remotes.length === 0) {
+    return (
+      <div className="git-workspace-view">
+        <div className="git-file-scroll">
+          <p className="git-empty">
+            No remote is configured for this repository. Add one with <code>git remote add origin …</code> to fetch or push
+            from here.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="git-workspace-view">
+      <div className="git-file-scroll">
+        <div className="git-file-group">
+          <h3>
+            <CloudDownload size={12} />
+            Tracking
+          </h3>
+          <div className="git-remote-status">
+            <p>
+              <strong>{tracking?.branch ?? plan?.branch ?? "—"}</strong>
+              {tracking?.upstream ? (
+                <em>tracking {tracking.upstream}</em>
+              ) : (
+                <em>no upstream yet</em>
+              )}
+            </p>
+            <p className="git-remote-counts">
+              {ahead} ahead · {behind} behind
+            </p>
+            {/* Said plainly because it is the single most misread number here: git
+                cannot know it is behind until the remote-tracking ref is updated. */}
+            <p className="git-remote-hint">Counts reflect the last fetch. Fetch to refresh them.</p>
+          </div>
+        </div>
+
+        {dirty && (
+          <p className="git-warning">Uncommitted changes present. Pull is blocked until they are committed or stashed.</p>
+        )}
+        {behind > 0 && ahead > 0 && (
+          <p className="git-warning">
+            This branch and its upstream have diverged. Push will be rejected, and this app only fast-forwards — resolve it
+            with git directly.
+          </p>
+        )}
+        {plan && !plan.pushable && plan.reason && <p className="git-warning">{plan.reason}</p>}
+
+        <div className="git-remote-actions">
+          <button className="git-row-action" disabled={busy} onClick={onFetch} type="button">
+            <CloudDownload size={12} />
+            Fetch
+          </button>
+          <button
+            className="git-row-action"
+            disabled={busy || dirty || behind === 0 || !tracking?.upstream}
+            onClick={onPull}
+            type="button"
+          >
+            <RotateCcw size={12} />
+            Pull (fast-forward)
+          </button>
+          <button
+            className="git-row-action"
+            disabled={busy || !plan?.pushable || protectedBlocked || (ahead === 0 && !plan?.createsUpstream)}
+            onClick={onPush}
+            type="button"
+          >
+            <CloudUpload size={12} />
+            {plan?.createsUpstream ? "Publish branch" : "Push"}
+          </button>
+        </div>
+      </div>
+
+      <div className="git-commit-box">
+        <label htmlFor="git-remote-select">Remote</label>
+        <select
+          className="git-inline-input"
+          id="git-remote-select"
+          onChange={(event) => onRemoteChange(event.target.value)}
+          value={selectedRemote || plan?.remote || ""}
+        >
+          {remotes.map((remote) => (
+            <option key={remote.name} value={remote.name}>
+              {remote.name}
+              {remote.fetchUrl ? ` — ${remote.fetchUrl}` : ""}
+            </option>
+          ))}
+        </select>
+        {plan?.protectedBranch && (
+          <label className="git-checkbox" htmlFor="git-allow-protected">
+            <input
+              checked={allowProtected}
+              id="git-allow-protected"
+              onChange={(event) => onAllowProtectedChange(event.target.checked)}
+              type="checkbox"
+            />
+            Allow pushing to {plan.branch} (protected)
+          </label>
+        )}
+        <p className="git-remote-hint">Force push is never available here.</p>
+      </div>
+    </div>
+  );
 }
 
 function LogView({ entries }: { entries: Array<{ hash: string; shortHash: string; author: string; date: string; subject: string }> }) {

@@ -156,6 +156,51 @@ export const appMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 9,
+    name: "app-legacy-additive-columns",
+    up: (db) => {
+      // The last additive columns still applied outside this list, by seven
+      // `ensureColumn`/`ensureColumns` calls in `DesktopDatabase.migrate()`. They
+      // predate versioning, so a database from any earlier build may already have
+      // some, all, or none of them — the same situation version 7 resolved for the
+      // workflow tables, and the same reason adopting them here is safe:
+      // `ensureColumns` is idempotent. From this version on, this list is the only
+      // place an additive column is declared.
+      ensureColumns(db, "agent_runs", [
+        { name: "profile_id", ddl: "text" },
+        { name: "task_id", ddl: "text" },
+        { name: "conversation_id", ddl: "text" },
+      ]);
+
+      ensureColumns(db, "agent_profiles", [
+        { name: "provider_connection_id", ddl: "text" },
+        { name: "module", ddl: "text" },
+        { name: "options", ddl: "text" },
+      ]);
+
+      ensureColumns(db, "tasks", [
+        { name: "parent_task_id", ddl: "text" },
+        { name: "assigned_cli_id", ddl: "text" },
+        { name: "assigned_model", ddl: "text" },
+        { name: "due_at", ddl: "text" },
+        { name: "difficulty", ddl: "text" },
+        { name: "estimated_minutes", ddl: "integer" },
+        { name: "automation_enabled", ddl: "integer not null default 0" },
+        { name: "last_run_at", ddl: "text" },
+        { name: "last_run_id", ddl: "text" },
+        { name: "run_count", ddl: "integer not null default 0" },
+      ]);
+
+      // These two indexes cover columns added just above, so they cannot live in
+      // the baseline block: on a database predating the columns, creating them
+      // there would fail before this migration had a chance to run.
+      db.exec(`
+        create index if not exists idx_tasks_due on tasks (automation_enabled, status, due_at);
+        create index if not exists idx_agent_runs_task on agent_runs (task_id, started_at desc);
+      `);
+    },
+  },
 ];
 
 /**

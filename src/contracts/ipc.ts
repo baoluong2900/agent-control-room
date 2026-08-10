@@ -12,13 +12,16 @@ import type {
   AgentSessionSummary,
 } from "./agent";
 import type {
+  GitBlameResult,
   GitBranchSummary,
   GitCommitSummary,
   GitDiffSummary,
   GitFileDiff,
   GitOperationResult,
+  GitPushPlan,
   GitStashDetail,
   GitStashEntry,
+  GitTrackingStatus,
   ProjectSummary,
 } from "./project";
 import type {
@@ -195,6 +198,28 @@ export interface AgenticDesktopApi {
     stashApply: (cwd: string, ref: string, expectedOid: string, keep?: boolean) => Promise<GitOperationResult>;
     /** Drops only when the shifting ref still names the immutable expected OID. */
     stashDrop: (cwd: string, ref: string, expectedOid: string) => Promise<GitOperationResult>;
+    /**
+     * Ahead/behind against the upstream, as of the last fetch. `null` when there is
+     * no repository or no branch checked out.
+     */
+    tracking: (cwd: string) => Promise<GitTrackingStatus | null>;
+    /** `git fetch --prune`. Updates remote-tracking refs only; never touches local work. */
+    fetch: (cwd: string, remote?: string) => Promise<GitOperationResult>;
+    /** `git pull --ff-only`. Refuses on a dirty tree and never merges or rebases. */
+    pull: (cwd: string, remote?: string) => Promise<GitOperationResult>;
+    /** What a push would publish, for the confirmation dialog. Performs nothing. */
+    pushPlan: (cwd: string, remote?: string) => Promise<GitPushPlan>;
+    /**
+     * Publishes the current branch. `allowProtected` is required for `main`/`master`,
+     * and `expectedBranch` makes the push refuse if HEAD moved since the dialog was
+     * rendered. Never forces.
+     */
+    push: (
+      cwd: string,
+      options?: { remote?: string; allowProtected?: boolean; expectedBranch?: string },
+    ) => Promise<GitOperationResult>;
+    /** Line-level authorship for one file. Read-only. */
+    blame: (cwd: string, path: string) => Promise<GitBlameResult>;
   };
   knowledge: {
     get: (projectPath: string) => Promise<KnowledgeSnapshot | null>;

@@ -12,7 +12,7 @@ import type {
   WorkflowTrigger,
   WorkflowTriggerType,
 } from "@contracts";
-import { ensureColumns, type SqliteDatabase } from "./sqlite-types";
+import type { SqliteDatabase } from "./sqlite-types";
 import { runMigrations, workflowMigrations } from "./migrations";
 import { workflowSeeds } from "../workflows/workflow-seeds";
 

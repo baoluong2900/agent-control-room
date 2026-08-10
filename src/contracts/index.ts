@@ -22,6 +22,7 @@ export type {
   AgentRunInput,
   AgentRunRecord,
   AgentSessionSummary,
+  AgentSmokeTest,
   AgentStatus,
   AgentStructuredChat,
 } from "./agent";
@@ -57,6 +58,8 @@ export type {
   GatewayChatUsage,
 } from "./gateway-chat";
 export type {
+  GitBlameLine,
+  GitBlameResult,
   GitBranchSummary,
   GitCommitSummary,
   GitDiffSummary,
@@ -64,8 +67,11 @@ export type {
   GitFileChangeKind,
   GitFileDiff,
   GitOperationResult,
+  GitPushPlan,
+  GitRemoteSummary,
   GitStashDetail,
   GitStashEntry,
+  GitTrackingStatus,
   ProjectSummary,
 } from "./project";
 export type {

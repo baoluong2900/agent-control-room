@@ -26,6 +26,14 @@ const catalog: AgentCliDescriptor[] = [
     supportsInteractive: true,
     supportsStdin: true,
     autoApproveArgs: ["--trust-all-tools"],
+    smokeTest: {
+      // Verified live: prints a JSON array of session records for the cwd and does
+      // not contact a model. The `[` anchor is what distinguishes real output from
+      // the usage banner kiro-cli prints (also exit 0) when it dislikes the args.
+      args: ["chat", "--list-sessions", "-f", "json"],
+      expect: "[",
+      proves: "Kiro CLI listed its local chat sessions as JSON without contacting a model.",
+    },
     // Verified against `kiro-cli chat --help`.
     options: [
       {
@@ -317,6 +325,14 @@ const catalog: AgentCliDescriptor[] = [
     supportsInteractive: true,
     supportsStdin: true,
     autoApproveArgs: ["--dangerously-skip-permissions"],
+    smokeTest: {
+      // Verified live: reads Claude Code's own MCP configuration and prints it.
+      // Chosen over `--version` because that only proves a binary exists — this
+      // proves the CLI can load its config — and it still spends no quota.
+      args: ["mcp", "list"],
+      expect: "mcp server",
+      proves: "Claude Code read its MCP configuration locally, with no model request.",
+    },
     systemPromptFlag: "--append-system-prompt",
     structuredChat: {
       args: ["-p", "--output-format", "json"],
@@ -391,6 +407,13 @@ const catalog: AgentCliDescriptor[] = [
     supportsInteractive: true,
     supportsStdin: true,
     autoApproveArgs: ["--dangerously-bypass-approvals-and-sandbox"],
+    smokeTest: {
+      // Verified live: prints its MCP server table (header only when none are
+      // configured), which exercises config loading and stays entirely local.
+      args: ["mcp", "list"],
+      expect: "name",
+      proves: "Codex CLI read its MCP configuration locally, with no model request.",
+    },
     structuredChat: {
       // Verified live on 2026-08-09, both turns through the real CLI.
       //
@@ -552,6 +575,14 @@ const catalog: AgentCliDescriptor[] = [
     promptMode: "arg",
     supportsInteractive: true,
     supportsStdin: true,
+    smokeTest: {
+      // Verified live: enumerates the models OpenCode has configured providers for.
+      // A stronger signal than `--version` — it proves provider config resolves —
+      // and still local: no completion is requested.
+      args: ["models"],
+      expect: "/",
+      proves: "OpenCode enumerated its configured provider models without running a completion.",
+    },
     structuredChat: {
       // Verified live: `opencode run --format json "…"` emits JSONL — one object
       // per event — where the answer is the `text` event's `part.text` and every

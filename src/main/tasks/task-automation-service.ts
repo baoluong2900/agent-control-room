@@ -283,11 +283,11 @@ export class TaskAutomationService {
     const cutoff = new Date(now.getTime() - silenceMs).toISOString();
 
     for (const task of this.db.listStalledTaskCandidates(cutoff)) {
-      // `markTaskRunStarted` flips the task to `investigating` at enqueue time,
-      // so a run still waiting behind the concurrency limit looks exactly like a
-      // hung agent here. A run that has not spawned yet has produced no output
-      // by definition and must not be reaped — the silence window only means
-      // something once a child actually exists.
+      // Belt and braces on top of the `queued` task status: `listStalledTaskCandidates`
+      // now only returns `investigating` rows, which a task reaches when its child
+      // actually spawns, but the run row is the authority on whether a process exists
+      // and it costs one indexed lookup to ask. A run with no child has produced no
+      // output by definition, so the silence window means nothing for it.
       if (task.lastRunId && this.db.getAgentRun(task.lastRunId)?.status === "queued") continue;
 
       const lastOutputAt = task.lastRunId ? this.db.lastTerminalLogAt(task.lastRunId) : null;

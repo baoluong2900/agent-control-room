@@ -175,6 +175,26 @@ export interface AgentStructuredChat {
   outputFormat?: "json" | "jsonl";
 }
 
+/**
+ * A quota-safe usability probe for one CLI.
+ *
+ * Plain serialisable data, not a callback: descriptors cross the Electron
+ * contextBridge, where a function would be dropped by structured clone and the
+ * capability would silently vanish in the packaged app.
+ */
+export interface AgentSmokeTest {
+  /** Args appended to the resolved binary. Must never reach a paid model. */
+  args: string[];
+  /**
+   * Substring the output must contain for the probe to count as a pass, matched
+   * case-insensitively. A zero exit code alone is not enough: several CLIs exit 0
+   * while printing a usage banner, which proves nothing about usability.
+   */
+  expect?: string;
+  /** One line explaining what the probe proves, shown in Diagnostics. */
+  proves: string;
+}
+
 /** Static description of a locally installable agent CLI. */
 export interface AgentCliDescriptor {
   id: AgentCliId;
@@ -208,6 +228,19 @@ export interface AgentCliDescriptor {
   options?: AgentCliOption[];
   /** Optional args that make the CLI print its own model list. */
   modelListArgs?: string[];
+  /**
+   * A command that proves the CLI is usable **without spending provider quota**.
+   *
+   * `versionArgs` only proves a binary exists; this proves it can do local work —
+   * read its config, list its sessions, enumerate its models. That is the strongest
+   * claim Diagnostics can make without sending a prompt to a paid model, and it is
+   * deliberately the ceiling: a real round-trip would bill the user for opening a
+   * health panel.
+   *
+   * Absent for CLIs with no such command, and that absence is reported honestly as
+   * `unknown` rather than as a failure.
+   */
+  smokeTest?: AgentSmokeTest;
   /**
    * Present only on CLIs that can hold a structured conversation. Its absence is
    * what makes `uiMode: "chat"` unavailable, so adding a third chat-capable CLI

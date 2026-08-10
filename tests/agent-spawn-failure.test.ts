@@ -123,11 +123,15 @@ test("output flushed after exit does not overwrite a terminal status", async () 
 });
 
 /**
- * `markTaskRunStarted` flips a task to `investigating` at enqueue time, so a run
- * waiting behind the concurrency limit looks identical to a hung agent. Reaping
- * it failed a task whose agent had never even spawned.
+ * A run waiting behind the concurrency limit used to be indistinguishable from a
+ * hung agent: `markTaskRunStarted` flipped the task to `investigating` at enqueue
+ * time, so the sweeper reaped a task whose agent had never spawned and the card
+ * showed an agent working with an empty terminal.
+ *
+ * The task now reads `queued` until its child actually exists, which is both the
+ * honest label and what keeps it out of the sweeper's candidate query.
  */
-test("a queued run that never spawned is not reaped as stalled", async () => {
+test("a queued run that never spawned reads as queued and is not reaped as stalled", async () => {
   const db = await openDatabase("queued-stall");
   const manager = new AgentProcessManager(db, () => null);
   const automation = new TaskAutomationService(db, manager, () => null);
@@ -146,7 +150,11 @@ test("a queued run that never spawned is not reaped as stalled", async () => {
   });
 
   assert.equal(db.getAgentRun(queuedRun.runId)?.status, "queued", "the fourth run only queued");
-  assert.equal(db.getTask(task.id)?.status, "investigating");
+  assert.equal(
+    db.getTask(task.id)?.status,
+    "queued",
+    "a task behind the concurrency limit must not claim an agent is investigating",
+  );
 
   const reaped = await automation.sweepStalledTasks({
     now: new Date(Date.now() + 20 * 60_000),
@@ -154,7 +162,22 @@ test("a queued run that never spawned is not reaped as stalled", async () => {
   });
 
   assert.equal(reaped.length, 0, "a run with no child cannot be silent");
-  assert.equal(db.getTask(task.id)?.status, "investigating", "the task keeps waiting for its slot");
+  assert.equal(db.getTask(task.id)?.status, "queued", "the task keeps waiting for its slot");
+
+  // `queued` must be a phase, not a dead end: once a slot frees up the child spawns
+  // and the task is promoted. Without this the fix would simply have moved the lie.
+  for (const session of manager.sessions().filter((entry) => entry.runId !== queuedRun.runId)) {
+    await manager.stop(session.runId);
+  }
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (db.getTask(task.id)?.status === "investigating") break;
+    await sleep(25);
+  }
+  assert.equal(
+    db.getTask(task.id)?.status,
+    "investigating",
+    "the task is promoted once its child actually spawns",
+  );
 
   manager.stopAll();
   await sleep(300);

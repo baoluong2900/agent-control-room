@@ -1047,6 +1047,14 @@
   border-color: rgba(96, 165, 250, 0.24);
 }
 
+/* Queued: accepted, waiting behind the concurrency limit. Deliberately cooler
+   than the purple running tone so the two are not read as the same state. */
+.status-cyan {
+  color: #a5f3fc;
+  background: rgba(74, 215, 240, 0.13);
+  border-color: rgba(74, 215, 240, 0.26);
+}
+
 .status-purple {
   color: #e7d7ff;
   background: rgba(167, 139, 250, 0.16);
@@ -1957,6 +1965,12 @@
   background: rgba(96, 165, 250, 0.13);
   border-color: rgba(96, 165, 250, 0.24);
   color: #c4b5fd;
+}
+
+.status-cyan {
+  background: rgba(74, 215, 240, 0.12);
+  border-color: rgba(74, 215, 240, 0.24);
+  color: #a5f3fc;
 }
 
 .task-checklist li::before,

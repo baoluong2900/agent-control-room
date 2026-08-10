@@ -50,6 +50,60 @@ test("branch and stash operations are exposed across the Electron bridge", async
   assert.match(panel, /stashApply\(project!\.path, entry\.ref, entry\.oid, keep\)/, "apply/pop must carry the same immutable identity");
 });
 
+test("outbound Git operations are exposed across the bridge and gated in the UI", async () => {
+  const [contract, preload, register, panel, css] = await Promise.all([
+    read("src/contracts/ipc.ts"),
+    read("src/preload/preload.ts"),
+    read("src/main/ipc/register-ipc.ts"),
+    read("src/renderer/components/GitDiffPanel.tsx"),
+    read("src/renderer/styles.css"),
+  ]);
+
+  for (const method of ["tracking", "fetch", "pull", "pushPlan", "push", "blame"]) {
+    assert.match(contract, new RegExp(`\\b${method}:`), `${method} is missing from AgenticDesktopApi.git`);
+    assert.match(preload, new RegExp(`\\b${method}:`), `${method} is missing from the preload bridge`);
+    assert.match(panel, new RegExp(`agentic\\.git\\.${method}\\b`), `${method} is never called by the Git UI`);
+  }
+
+  const channels = ["git:tracking", "git:fetch", "git:pull", "git:push-plan", "git:push", "git:blame"];
+  for (const channel of channels) {
+    assert.match(preload, new RegExp(`invoke\\(["']${channel}["']`), `${channel} is missing from preload`);
+    // `\s*` matters: a handler with a long argument list is wrapped by the
+    // formatter, putting the channel name on its own line.
+    assert.match(register, new RegExp(`handle\\(\\s*["']${channel}["']`), `${channel} has no main-process handler`);
+  }
+
+  // Every outbound channel must stay inside the approved-project allowlist: fetch
+  // and push contact a network host, so an unscoped path would let the renderer
+  // choose whose repository leaves the machine.
+  for (const channel of channels) {
+    const handler = new RegExp(`handle\\(\\s*["']${channel}["'][\\s\\S]{0,320}?approvedGitCwd`);
+    assert.match(register, handler, `${channel} must scope its cwd through approvedGitCwd`);
+  }
+
+  assert.match(panel, /label="Remote"/);
+  assert.match(panel, /label="Blame"/);
+  assert.match(panel, /window\.confirm\(/, "push must ask before sending code off the machine");
+  assert.match(panel, /expectedBranch: pushPlan\.branch/, "push must pin the branch the confirmation named");
+  assert.match(panel, /allowProtected: allowProtectedPush/, "the protected-branch toggle must reach the backend");
+  assert.match(panel, /Force push is never available here\./);
+  assert.doesNotMatch(panel, /--force/, "the UI must not offer a force push");
+
+  // Classes referenced by the new markup have to exist, or the view renders unstyled.
+  for (const className of [
+    "git-blame-list",
+    "git-blame-row",
+    "git-blame-meta",
+    "git-blame-line",
+    "git-remote-status",
+    "git-remote-counts",
+    "git-remote-hint",
+    "git-remote-actions",
+  ]) {
+    assert.match(css, new RegExp(`\\.${className}\\s*[,{:]`), `.${className} is referenced by markup but has no CSS rule`);
+  }
+});
+
 test("storage report and cleanup are exposed and rendered in Diagnostics", async () => {
   const [contract, preload, register, integrations, panel] = await Promise.all([
     read("src/contracts/ipc.ts"),

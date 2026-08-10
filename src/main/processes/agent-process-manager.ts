@@ -379,6 +379,16 @@ export class AgentProcessManager {
       conversationId: input.resumeConversationId,
     });
     this.db.updateAgentRunStatus(runId, "planning");
+    if (input.taskId) {
+      try {
+        // The child exists now, so the task stops claiming to be queued. Done here
+        // rather than at enqueue time because that is the whole distinction: a task
+        // behind the concurrency limit has produced nothing yet.
+        this.db.markTaskRunSpawned(input.taskId, runId);
+      } catch {
+        // Task bookkeeping is optional; the run itself must still proceed.
+      }
+    }
 
     this.emit({
       runId,

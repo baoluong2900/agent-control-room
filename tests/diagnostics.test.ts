@@ -9,6 +9,7 @@ import {
   collectDiagnostics,
   collectProjectChecks,
   collectProviderChecks,
+  runSmokeCheck,
 } from "../src/main/ipc/diagnostics.ts";
 
 function fakeTool(id: "git" | "docker", installed = true) {
@@ -21,9 +22,10 @@ function fakeTool(id: "git" | "docker", installed = true) {
   };
 }
 
-test("collectDiagnostics reads the catalog once and keeps unsupported smoke tests unknown", async () => {
+test("collectDiagnostics reads the catalog once and runs the declared smoke test", async () => {
   let catalogReads = 0;
   const descriptor = getAgentDescriptor("claude");
+  const smokeCalls: Array<{ command: string; args: string[] }> = [];
   const database = {
     databaseHealth: () => ({ schemaVersion: 7, sizeBytes: 4096, terminalLogRows: 0 }),
   };
@@ -46,12 +48,98 @@ test("collectDiagnostics reads the catalog once and keeps unsupported smoke test
     }),
     checkExternalTool: async (id) => fakeTool(id),
     checkProject: async () => [],
+    // Stubbed so the suite neither spawns a CLI nor depends on which are installed.
+    runSmoke: async (command, args) => {
+      smokeCalls.push({ command, args });
+      return { ok: true, output: "No MCP servers configured.", timedOut: false };
+    },
     now: new Date("2026-01-01T00:00:00.000Z"),
   });
 
   assert.equal(catalogReads, 1);
   assert.equal(result.tools[0].displayName, descriptor.displayName);
-  assert.equal(result.tools[0].checks?.find((check) => check.key.endsWith(":smoke"))?.status, "unknown");
+
+  const smoke = result.tools[0].checks?.find((check) => check.key.endsWith(":smoke"));
+  assert.equal(smoke?.status, "ok", "a passing quota-safe probe must report ok, not unknown");
+  assert.equal(smoke?.detail, descriptor.smokeTest?.proves, "the check states what the probe actually proved");
+  assert.deepEqual(
+    smokeCalls.map((call) => call.args),
+    [descriptor.smokeTest?.args],
+    "the descriptor's own args are what get run",
+  );
+});
+
+test("the smoke check discriminates between passing, failing, empty and unclaimed", async () => {
+  const claude = getAgentDescriptor("claude");
+  const expect = claude.smokeTest?.expect ?? "";
+  const pass = async () => ({ ok: true, output: `header\n${expect}\ntail`, timedOut: false });
+
+  // A guard is only worth having if it separates cases. Drive the real code with
+  // inputs that must be rejected plus one that must be accepted, and show the split.
+  const outcomes = {
+    passing: await runSmokeCheck("claude", claude, true, pass),
+    nonZeroExit: await runSmokeCheck("claude", claude, true, async () => ({
+      ok: false,
+      output: "command not recognised",
+      timedOut: false,
+    })),
+    // The case a plain exit-code check cannot see: `grok models` exits 0 while
+    // printing "You are not authenticated", which proves nothing about usability.
+    cleanExitWrongOutput: await runSmokeCheck("claude", claude, true, async () => ({
+      ok: true,
+      output: "You are not authenticated.",
+      timedOut: false,
+    })),
+    timedOut: await runSmokeCheck("claude", claude, true, async () => ({ ok: false, output: "", timedOut: true })),
+    notInstalled: await runSmokeCheck("claude", claude, false, pass),
+    // A CLI that declares no probe: `unknown`, and the wording must say there is no
+    // quota-safe command rather than implying the app forgot to declare one.
+    noProbe: await runSmokeCheck(
+      "gemini",
+      { ...claude, id: "gemini", smokeTest: undefined },
+      true,
+      pass,
+    ),
+  };
+
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(outcomes).map(([name, check]) => [name, check.status])),
+    {
+      passing: "ok",
+      nonZeroExit: "warn",
+      cleanExitWrongOutput: "warn",
+      timedOut: "warn",
+      notInstalled: "unknown",
+      noProbe: "unknown",
+    },
+    "were the check a no-op, every one of these would report the same status",
+  );
+
+  // Never `fail`: a CLI whose local helper command misbehaves may still run a real
+  // prompt perfectly, so Diagnostics degrades rather than condemning it.
+  assert.equal(
+    Object.values(outcomes).some((check) => check.status === "fail"),
+    false,
+    "a smoke probe must never report fail",
+  );
+
+  assert.equal(outcomes.passing.detail, claude.smokeTest?.proves);
+  assert.match(outcomes.cleanExitWrongOutput.detail ?? "", /did not look like a real answer/);
+  assert.match(outcomes.notInstalled.detail ?? "", /not on PATH/);
+  assert.match(outcomes.noProbe.detail ?? "", /no command that can be exercised without spending provider quota/);
+  assert.doesNotMatch(outcomes.noProbe.detail ?? "", /does not declare/, "the copy must not read as an unfinished feature");
+
+  // Every declared probe must actually be quota-safe. A prompt-shaped smoke test
+  // would bill the user for opening a health panel, which is the whole point of
+  // keeping this tier local.
+  for (const descriptor of [claude, getAgentDescriptor("kiro"), getAgentDescriptor("codex"), getAgentDescriptor("opencode")]) {
+    const args = descriptor.smokeTest?.args ?? [];
+    assert.ok(args.length > 0, `${descriptor.id} declares a smoke test with no args`);
+    for (const flag of [descriptor.promptFlag, descriptor.modelFlag]) {
+      if (flag) assert.equal(args.includes(flag), false, `${descriptor.id}'s smoke test must not carry ${flag}`);
+    }
+    assert.ok(descriptor.smokeTest?.proves, `${descriptor.id} must say what its probe proves`);
+  }
 });
 
 test("provider diagnostics are read-only and distinguish connected, stale, unverified and expired", () => {

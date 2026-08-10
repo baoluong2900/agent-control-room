@@ -220,6 +220,9 @@ const taskSeeds: TaskBlueprint[] = [
 // user to fix a precondition, failed exhausted its retries and offers a button.
 const statusMeta: Record<TaskStatus, { label: string; tone: string }> = {
   open: { label: "Open", tone: "blue" },
+  // Cyan, not purple: a queued task is accepted but has no child process yet, and
+  // sharing the running tone would put it back to claiming work it has not started.
+  queued: { label: "Queued", tone: "cyan" },
   investigating: { label: "Investigating", tone: "purple" },
   blocked: { label: "Blocked", tone: "red" },
   failed: { label: "Failed", tone: "orange" },
@@ -239,7 +242,7 @@ const difficultyMeta: Record<TaskDifficulty, { label: string; priority: TaskPrio
   epic: { label: "Epic", priority: "high", tone: "red" },
 };
 
-const statusFilters: Array<TaskStatus | "all"> = ["all", "open", "investigating", "blocked", "failed", "done"];
+const statusFilters: Array<TaskStatus | "all"> = ["all", "open", "queued", "investigating", "blocked", "failed", "done"];
 const schedulerCliOptions = cliOptions.filter((cliId) => cliId !== "custom");
 
 export function TasksModule({
@@ -404,6 +407,7 @@ export function TasksModule({
     scheduled: scheduledTasks.length,
     due: dueTasks.length,
     open: displayedTasks.filter((task) => task.status === "open").length,
+    queued: displayedTasks.filter((task) => task.status === "queued").length,
     investigating: displayedTasks.filter((task) => task.status === "investigating").length,
     blocked: displayedTasks.filter((task) => task.status === "blocked").length,
     failed: displayedTasks.filter((task) => task.status === "failed").length,
@@ -678,6 +682,9 @@ export function TasksModule({
         <TaskStat icon={<ListChecks size={15} />} label="Total Tasks" value={stats.total} tone="blue" />
         <TaskStat icon={<CalendarClock size={15} />} label="Scheduled" value={stats.scheduled} tone="cyan" />
         <TaskStat icon={<PlayCircle size={15} />} label="Due Now" value={stats.due} tone="red" />
+        {/* Queued is its own tile so a full concurrency queue is visible rather than
+            inflating the Investigating count with runs that have not spawned. */}
+        <TaskStat icon={<CalendarClock size={15} />} label="Queued" value={stats.queued} tone="cyan" />
         <TaskStat icon={<Search size={15} />} label="Investigating" value={stats.investigating} tone="purple" />
         <TaskStat icon={<AlertTriangle size={15} />} label="Blocked" value={stats.blocked} tone="red" />
         <TaskStat icon={<CheckCircle2 size={15} />} label="Done" value={stats.done} tone="green" />
