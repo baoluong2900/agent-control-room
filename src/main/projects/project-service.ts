@@ -1,6 +1,5 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { dialog } from "electron";
 import type { ProjectSummary } from "@contracts";
 import type { DesktopDatabase } from "../database/desktop-database";
 import { requireApprovedProjectPath } from "./approved-project-path";
@@ -9,6 +8,8 @@ export class ProjectService {
   constructor(private readonly db: DesktopDatabase) {}
 
   async selectFolder(): Promise<ProjectSummary | null> {
+    // @ts-ignore
+    const { dialog } = await import("electron");
     const result = await dialog.showOpenDialog({
       title: "Select project folder",
       properties: ["openDirectory", "createDirectory"],

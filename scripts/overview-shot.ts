@@ -11,7 +11,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { DesktopDatabase } from "../src/main/database/desktop-database";
 import { registerIpcHandlers } from "../src/main/ipc/register-ipc";
 import { AgentProcessManager } from "../src/main/processes/agent-process-manager";
@@ -54,7 +54,7 @@ async function main() {
   const workflowService = new WorkflowService(database, () => window?.webContents ?? null);
   const workflowSchedulerService = new WorkflowSchedulerService(workflowService, () => window?.webContents ?? null);
   const harnessVault = new ProviderSecretVault(userDataPath, harnessSecretStorage);
-  registerIpcHandlers({
+  registerIpcHandlers(ipcMain, {
     agentProcessManager: manager,
     database,
     knowledgeService: new KnowledgeService(database),

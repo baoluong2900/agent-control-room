@@ -219,9 +219,9 @@ test("the privileged window denies navigation and every Git handler checks the a
   assert.match(register, /const approvedGitCwd/);
 
   for (const channel of ["diff", "file-diff", "log", "stage", "unstage", "commit", "branches", "checkout", "stashes", "stash-detail", "stash-push", "stash-apply", "stash-drop"]) {
-    const start = register.indexOf(`ipcMain.handle("git:${channel}"`);
+    const start = register.indexOf(`registry.handle("git:${channel}"`);
     assert.ok(start >= 0, `git:${channel} handler is missing`);
-    const next = register.indexOf("ipcMain.handle(", start + 20);
+    const next = register.indexOf("registry.handle(", start + 20);
     const body = register.slice(start, next >= 0 ? next : register.length);
     assert.match(body, /approvedGitCwd\(cwd\)/, `git:${channel} does not scope cwd to an approved project`);
   }

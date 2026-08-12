@@ -153,6 +153,6 @@ export type {
   WorkflowTrigger,
   WorkflowTriggerType,
 } from "./workflow";
-export type { AgenticDesktopApi } from "./ipc";
+export type { AgenticDesktopApi, EventBroadcaster } from "./ipc";
 export { buildOptionArgs } from "./agent-options";
 export type { AgentOptionArgContext } from "./agent-options";

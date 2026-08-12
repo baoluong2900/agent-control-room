@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { WebContents } from "electron";
 import type {
+  EventBroadcaster,
   KnowledgeCategoryStat,
   KnowledgeCodeGraph,
   KnowledgeExportFormat,
@@ -148,7 +148,7 @@ export class KnowledgeService {
      * Optional so tests and harnesses can construct the service without an
      * Electron window; progress is simply not published when absent.
      */
-    private readonly webContentsProvider?: () => WebContents | null,
+    private readonly webContentsProvider?: () => EventBroadcaster | null,
   ) {}
 
   get(projectPath: string): KnowledgeSnapshot | null {

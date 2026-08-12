@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import type { WebContents } from "electron";
 import type {
   AgentProfile,
+  EventBroadcaster,
   WorkflowActivityEntry,
   WorkflowDefinition,
   WorkflowEvent,
@@ -62,7 +62,7 @@ export class WorkflowService {
 
   constructor(
     private readonly db: DesktopDatabase,
-    private readonly webContentsProvider: () => WebContents | null,
+    private readonly webContentsProvider: () => EventBroadcaster | null,
     private readonly secretVault?: ProviderSecretVault,
   ) {
     this.repo = db.workflows;

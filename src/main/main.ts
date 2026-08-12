@@ -1,4 +1,4 @@
-import { app, BrowserWindow, safeStorage, shell } from "electron";
+import { app, BrowserWindow, ipcMain, safeStorage, shell } from "electron";
 import { writeFile } from "node:fs/promises";
 import { ensureAgentPath } from "./agents/path-env";
 import { DesktopDatabase } from "./database/desktop-database";
@@ -100,7 +100,7 @@ app.whenReady().then(async () => {
       }),
   });
 
-  registerIpcHandlers({
+  registerIpcHandlers(ipcMain, {
     agentProcessManager,
     database,
     knowledgeService,

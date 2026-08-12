@@ -1,7 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
-import type { WebContents } from "electron";
 import type {
   AgentEvent,
   AgentProcess,
@@ -9,6 +8,7 @@ import type {
   AgentRunRecord,
   AgentSessionSummary,
   AgentStatus,
+  EventBroadcaster,
 } from "@contracts";
 import { getAgentDescriptor } from "../agents/catalog";
 import { buildInvocation, quoteCommand, resolveExecutable, structuredChatFor, usesStructuredChat } from "../agents/commands";
@@ -132,7 +132,7 @@ export class AgentProcessManager {
 
   constructor(
     private readonly db: DesktopDatabase,
-    private readonly webContentsProvider: () => WebContents | null,
+    private readonly webContentsProvider: () => EventBroadcaster | null,
     private readonly secretVault?: ProviderSecretVault,
     /**
      * SIGTERM grace period. Injectable so the escalation test can shrink it to a

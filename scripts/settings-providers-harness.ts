@@ -8,7 +8,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { DesktopDatabase } from "../src/main/database/desktop-database";
 import { registerIpcHandlers } from "../src/main/ipc/register-ipc";
 import { KnowledgeService } from "../src/main/knowledge/knowledge-service";
@@ -86,7 +86,7 @@ async function main() {
     },
   );
 
-  registerIpcHandlers({
+  registerIpcHandlers(ipcMain, {
     agentProcessManager: manager,
     database,
     knowledgeService: new KnowledgeService(database),

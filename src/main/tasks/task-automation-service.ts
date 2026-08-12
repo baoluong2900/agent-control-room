@@ -1,6 +1,6 @@
-import type { WebContents } from "electron";
 import type {
   AgentCliId,
+  EventBroadcaster,
   KnowledgeSnapshot,
   TaskEvent,
   TaskPlanInput,
@@ -46,7 +46,7 @@ export class TaskAutomationService {
   constructor(
     private readonly db: DesktopDatabase,
     private readonly agentProcessManager: AgentProcessManager,
-    private readonly webContentsProvider: () => WebContents | null,
+    private readonly webContentsProvider: () => EventBroadcaster | null,
     /**
      * Appended as optional so the existing callers (tests, five harnesses) keep
      * working unchanged. Without them, AI planning degrades to the template plan

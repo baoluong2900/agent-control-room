@@ -1,7 +1,6 @@
 import fs, { type FSWatcher } from "node:fs";
 import path from "node:path";
-import type { WebContents } from "electron";
-import type { WorkflowDefinition, WorkflowEvent, WorkflowTriggerType } from "@contracts";
+import type { WorkflowDefinition, WorkflowEvent, WorkflowTriggerType, EventBroadcaster } from "@contracts";
 import { git } from "../git/git-service";
 import { type IssueSummary, gh, listOpenIssues, parseIssueTrigger } from "./issue-poller";
 import type { WorkflowService } from "./workflow-service";
@@ -85,7 +84,7 @@ export class WorkflowSchedulerService {
 
   constructor(
     private readonly workflows: WorkflowService,
-    private readonly webContentsProvider: () => WebContents | null,
+    private readonly webContentsProvider: () => EventBroadcaster | null,
     /** Injection seam for tests: runs one git command in `cwd`. */
     private readonly runGit: (cwd: string, args: string[]) => Promise<{ ok: boolean; output: string }> = git,
     /** Injection seam for tests: runs one `gh` command in `cwd`. */

@@ -1,4 +1,4 @@
-import type { WebContents } from "electron";
+import type { EventBroadcaster } from "@contracts";
 import type { WebhookListenerStatus } from "./webhook-listener";
 import { WebhookListenerService, generateWebhookToken } from "./webhook-listener";
 import type { WorkflowSchedulerService } from "./workflow-scheduler";
@@ -27,7 +27,7 @@ export class WebhookCoordinator {
     private readonly database: DesktopDatabase,
     private readonly vault: ProviderSecretVault,
     private readonly scheduler: WorkflowSchedulerService,
-    private readonly webContentsProvider: () => WebContents | null,
+    private readonly webContentsProvider: () => EventBroadcaster | null,
     /** Fixed port for tests; production lets the OS assign one. */
     private readonly port?: number,
   ) {}

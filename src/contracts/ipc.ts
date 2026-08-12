@@ -239,3 +239,8 @@ export interface AgenticDesktopApi {
     subscribeGatewayChat: (callback: (event: GatewayChatEvent) => void) => () => void;
   };
 }
+
+export interface EventBroadcaster {
+  send(channel: string, payload: any): void;
+}
+
